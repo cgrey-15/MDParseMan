@@ -13,6 +13,9 @@ add_executable (MDParseMan "MDParseMan.cpp" "MDParseMan.h" "Parser.cpp" "TFrame.
 target_link_libraries(MDParseMan PRIVATE nlohmann_json::nlohmann_json cxxopts::cxxopts fmt::fmt)
 target_compile_features(MDParseMan PRIVATE cxx_std_20)
 
+if(NOT CMAKE_HOST_WIN32)
+	set(CMAKE_HOST_WIN32 $<NOT:${CMAKE_HOST_UNIX}>)
+endif()
 add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<IF:${CMAKE_HOST_WIN32},copy /b,cp>")
 
 #message(WARNING $<IF:$<CONFIG:Debug>, hello, goodbye> )
@@ -25,8 +28,6 @@ set(COPY_COMMAND "$<IF:${CMAKE_HOST_WIN32},copy,cp>")
 
 add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/src/test.txt
 COMMAND ${COPY_COMMAND} $<SHELL_PATH:${CMAKE_SOURCE_DIR}/rud_test/test.txt> $<SHELL_PATH:${CMAKE_BINARY_DIR}/src>)
-add_custom_command(TARGET MDParseMan PRE_BUILD
-COMMAND ${COPY_COMMAND} $<SHELL_PATH:${CMAKE_SOURCE_DIR}/rud_test/spec.json> $<SHELL_PATH:${CMAKE_BINARY_DIR}/src>)
 add_custom_command(TARGET MDParseMan PRE_BUILD
 COMMAND ${COPY_COMMAND} $<SHELL_PATH:${CMAKE_SOURCE_DIR}/rud_test/Testy.txt> $<SHELL_PATH:${CMAKE_BINARY_DIR}/src>)
 add_custom_command(TARGET MDParseMan PRE_BUILD
