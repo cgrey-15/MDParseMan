@@ -1,0 +1,16 @@
++Document
++Paragraph 0
+This is your captain speaking. I announce
+that takeoff is just abound. Enjoy your flight.
+/Paragraph
++List 
++ListItem 1
++IndentedCode 1
+This is your attourney speaking. Enjoy your flight.
+I can't help but wonder...
+Are clams mollusks?
+/IndentedCode
+/ListItem
+/List
+/Document
+
