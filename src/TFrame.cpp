@@ -1,4 +1,5 @@
-#include "MDParseMan.h"
+#include <fstream>
+#include "md_parseman/MDParseMan.h"
 
 void revitalizeViews(MDPMNode& node, const std::string& buffer);
 

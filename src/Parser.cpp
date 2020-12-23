@@ -1,15 +1,31 @@
-#include "MDParseMan.h"
+#include "md_parseman/MDParseMan.h"
 #include <istream>
-#include <sstream>
+//#include <sstream>
+#include <type_traits>
+#include <vector>
 #include <regex>
 #include <string_view>
 #include <cstring>
 #include <charconv>
 #include <assert.h>
+#include <optional>
+#include <tuple>
+#include "MDParseImpl.h"
 
-/*
-struct mdpm_parser::MDPMContext {
-};*/
+namespace md_parseman {
+	namespace impl {
+		struct Context {
+			using mem_input = tao::pegtl::memory_input<tao::pegtl::tracking_mode::eager>;
+
+			std::vector<char> textBuffer;
+			MDPMNode* freshestBlock;
+			size_t bodyOffset;
+			size_t bodyLen;
+			std::optional<mem_input> inp_;
+			bool parseInMemory;
+		};
+	}
+}
 
 
 namespace mdpm_impl {
@@ -40,23 +56,78 @@ namespace mdpm_impl {
 		bool               matching;
 		bool                 preCmp;
 		posptr_t                pos;
+		size_t        indentDeficit;
 		posptr_t           currLine;
+		posptr_t              bound;
+		posptr_t      nonWSCharTPos = std::numeric_limits<posptr_t>::max();
 	};
+
 }
-MDPMNode* _processNodeMatchExistingImpl(MDPMNode& node, mdpm_parser::Context& cotx, const std::string& line, mdpm_impl::BlobParsingState& state);
-MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm_parser::Context& cotx, const std::string& line, mdpm_impl::BlobParsingState& state);
-MDPMNode* processNodeMatchExisting(MDPMNode& node, mdpm_parser::Context& ctx, const std::string& line, mdpm_impl::BlobParsingState& state);
-void _injectText(mdpm_parser::Context& ctx, MDPMNode& node, const char* str, size_t len, size_t strpos);
+namespace md = md_parseman;
+bool findATXHeading(md::impl::Context& contx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu);
+void matchSetextHeading(md::impl::Context& contx, MDPMNode& node, const char* line);;
+void matchThematic(md::impl::Context& contx, MDPMNode& node, const char* line);
+auto findCode(md::impl::Context& contx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)->std::optional<IndentedCode>;
+bool matchCode(md::impl::Context& contx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu);
+bool matchList(md::impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu);
+auto findList(md::impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu, char (&spacings)[3])->std::optional<ListInfo>;
+auto findListItem(md::impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu) -> std::optional<std::pair<ListInfo, ListItemInfo>>;
+bool matchListItem(md::impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu);
+bool findBlockQuote(md::impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu, bool continuation = false);
+bool matchParagraphLineNew(md::impl::Context& contx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu);
+bool matchParagraphLine(md::impl::Context& contx, MDPMNode& node, const /*std::string& line*/char*, mdpm_impl::BlobParsingState& currSitu);
+size_t matchParagraphLineLite(const std::string_view line, const mdpm_impl::BlobParsingState& state);
 
+MDPMNode& pickCorrectAncestor(MDPMNode& parent, const MDPMNode::type_e childTypeTag);
 
+MDPMNode* _processNodeMatchExistingImpl(MDPMNode& node, md_parseman::impl::Context& cotx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state);
+MDPMNode* processNodeMatchAnyNew(MDPMNode& node, md_parseman::impl::Context& cotx, const char * line, mdpm_impl::BlobParsingState& state);
+MDPMNode* processNodeMatchExisting(MDPMNode& node, md_parseman::impl::Context& ctx, const char * line, mdpm_impl::BlobParsingState& state);
+void _injectText(md_parseman::impl::Context& ctx, MDPMNode& node, const char* str, size_t len, size_t strpos, bool appendNewline = false);
 
-MDPMNode* processNodeMatchExisting(MDPMNode& node, mdpm_parser::Context& cotx, const std::string& line, mdpm_impl::BlobParsingState& state) {
+MDPMNode* processNodeMatchExisting(MDPMNode& node, md_parseman::impl::Context& cotx, const char * line, mdpm_impl::BlobParsingState& state) {
 	return _processNodeMatchExistingImpl(node, cotx, line, state);
 }
+namespace mdpm0_impl = md_parseman::impl;
 
-bool _processSingle(MDPMNode& n, mdpm_parser::Context& cotx, const std::string& line, mdpm_impl::BlobParsingState& state);
-MDPMNode* _processNodeMatchExistingImpl(MDPMNode& node, mdpm_parser::Context& cotx, const std::string& line, mdpm_impl::BlobParsingState& state) {
-	//_processSingle(node, cotx, line, state);
+/**
+returns: size_t homogenous tuple {a, b, c} where a is logical spaces counted, b is the number of bytes consumed, and
+c is how many spaces that have over-extended past logicalSpaceIndent from de-tabifying
+*/
+std::tuple<size_t, size_t, size_t> bumpByLogicalSpaces(TAO_PEGTL_NAMESPACE::memory_input<TAO_PEGTL_NAMESPACE::tracking_mode::eager>& input, const size_t logicalSpaceIndent, const size_t absoluteLogicalIndent);
+
+md::Parser::Parser(md::Parser&& o) noexcept : currLine_{std::move(o.currLine_)},
+root_{std::move(o.root_)},
+latestBlock_{ std::move(o.latestBlock_) },
+ctx_{ std::move(o.ctx_) }
+{
+	o.root_ = nullptr;
+	o.latestBlock_ = nullptr;
+	o.ctx_ = nullptr;
+}
+
+md::Parser::Parser(const char *begin, const char *end) :
+	root_{ new MDPMNode{ MDPMNode::type_e::Document, true, static_cast<size_t>(-1), {}, new MDPMNode{MDPMNode::type_e::NULL_BLOCK}, {} } },
+latestBlock_{ root_ },
+ctx_{ new impl::Context{{}, root_, 0, 0, std::optional<mdpm0_impl::Context::mem_input>{std::in_place, begin, end}, true} }
+{
+	root_->parent->parent = nullptr;
+	ctx_->textBuffer.reserve(1024);
+}
+
+md::Parser::Parser() : currLine_{}, 
+root_{ new MDPMNode{ MDPMNode::type_e::Document, true, static_cast<size_t>(-1), {}, new MDPMNode{MDPMNode::type_e::NULL_BLOCK}, {} } },
+latestBlock_{root_}, 
+ctx_{ new impl::Context{{}, root_, 0, 0, {std::nullopt}, false} }
+{
+	root_->parent = nullptr;
+	ctx_->textBuffer.reserve(1024);
+
+}
+md::Parser::~Parser() { delete root_->parent; delete root_; delete ctx_; }
+
+bool _processSingle(MDPMNode& n, mdpm0_impl::Context& cotx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state);
+MDPMNode* _processNodeMatchExistingImpl(MDPMNode& node, mdpm0_impl::Context& cotx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state) {
 	bool matched{};
 	if ( (matched = _processSingle(node, cotx, line, state)) && !node.children.empty() && node.children.back().isOpen ){//node.children.back().matching) {
 		return _processNodeMatchExistingImpl(node.children.back(), cotx, line, state);
@@ -68,23 +139,23 @@ MDPMNode* _processNodeMatchExistingImpl(MDPMNode& node, mdpm_parser::Context& co
 		return node.parent;
 	}
 }
-bool _processSingle(MDPMNode& n, mdpm_parser::Context& cotx, const std::string& line, mdpm_impl::BlobParsingState& state) {
+bool _processSingle(MDPMNode& n, mdpm0_impl::Context& cotx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state) {
 	bool matching{};
 	switch (n.flavor) {
 	case MDPMNode::type_e::Document: matching = true;//do nothing?
 		break;
-	case MDPMNode::type_e::IndentedCode: matching = mdpm_parser::matchCode(cotx, n, line.c_str(), state);
+	case MDPMNode::type_e::IndentedCode: matching = matchCode(cotx, n, line/*.c_str()*/, state);
 		break;
-	case MDPMNode::type_e::Paragraph: matching = mdpm_parser::matchParagraphLine(cotx, n, line, state);
+	case MDPMNode::type_e::Paragraph: matching = matchParagraphLine(cotx, n, line, state);
 		break;
-	case MDPMNode::type_e::Quote: matching = mdpm_parser::findBlockQuote(cotx, n, line.c_str(), state, true);
+	case MDPMNode::type_e::Quote: matching = findBlockQuote(cotx, n, line/*.c_str()*/, state, true);
 		break;
-	case MDPMNode::type_e::List: matching = mdpm_parser::matchList(cotx, n, line.c_str(), state);
+	case MDPMNode::type_e::List: matching = true;//matchList(cotx, n, line/*.c_str()*/, state);
 		break;
-#if 1
-	case MDPMNode::type_e::ListItem: matching = mdpm_parser::matchListItem(cotx, n, line.c_str(), state);
+	case MDPMNode::type_e::ATXHeading: matching = false;
 		break;
-#endif
+	case MDPMNode::type_e::ListItem: matching = matchListItem(cotx, n, line/*.c_str()*/, state);
+		break;
 	default:
 		break;
 	}
@@ -99,6 +170,7 @@ std::regex parLineRegex("^ {0,3}([^ ])");
 //std::regex parLine2Regex(" {0,3}([^ >].{0,2})|((([+\\-*][^ ].|1[.)][^ ]|1[^.)].)|[^+\\-*1> ]..).+)| +[^ ].*");
 std::regex parLine2Regex(" {0,3}(([^ >][^ ]? *)|([+\\-*][^ ].|1[).][^ ]|1[^).].|[^+\\-*1> ]..).*|     *[^ ].*)");
 
+#if 0
 bool mdpm_parser::matchParagraphLineNew(Context& cotx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu) {
 	using silly_t = std::variant<ListItemInfo>;
 
@@ -113,65 +185,66 @@ bool mdpm_parser::matchParagraphLineNew(Context& cotx, MDPMNode& node, const cha
 		currSitu.matching = true;
 		currSitu.pos = pos;
 		assert(node.isOpen == true);
-		//silly_t mebo{};
-		//auto& sumtn = std::get<ListItemInfo>(mebo);
-
-		//node.children.push_back({ MDPMNode::type_e::Paragraph , true, true, 0, {}, &node, {}, silly_t{} });
 		return true;
 	}
 	else {
 		return false;
 	}
 }
-bool mdpm_parser::matchParagraphLine(Context& cotx, MDPMNode& node, const std::string& line, mdpm_impl::BlobParsingState& currSitu) {
+#endif
+bool matchParagraphLine(mdpm0_impl::Context& cotx, MDPMNode& node, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& currSitu) {
+#if 0
 	using silly_t = std::variant<ListItemInfo>;
-	std::smatch matches{};
+	std::cmatch matches{};
 	decltype(matches.length()) pos = currSitu.pos;
-	bool res = std::regex_match(line.cbegin() + pos, line.cend(), matches, parLine2Regex);
+	auto length = std::strlen(line);
+	bool res = std::regex_match(line/*.cbegin()*/ + pos/*, line.cend()*/, matches, parLine2Regex);
 	if (res) {
 		pos += matches[1].first - matches[0].first;
 		currSitu.matching = true;
 		currSitu.pos = pos;
 		assert(node.isOpen == true);
-		if (node.flavor == MDPMNode::type_e::Paragraph) {
-#if 0
-			auto& sameNode = node.children.back();
-			cotx.textBuffer.push_back('\n');
-			cotx.textBuffer.insert(cotx.textBuffer.end(), line.cbegin() + currSitu.pos, line.cend());
-			sameNode.body = {cotx.textBuffer.data() + sameNode.posptr, cotx.textBuffer.size() - sameNode.posptr};
-#else
-			//cotx.textBuffer.push_back('\n');
-			//_injectText(cotx, node, line.c_str(), line.size(), currSitu.pos);
-#endif
-		}
 	}
 	else {
 		currSitu.matching = false;
 		if (node.flavor == MDPMNode::type_e::Paragraph) {
-			//node.matching = false;
 			if (!node.children.empty()) {
-				//node.children.back().matching = false;
 			}
 		}
 	}
 	return res;
+#endif
+	if (mdpm_impl::tryNonBlank(*cotx.inp_)) {
+		return true;
+	}
+	else {
+		//std::get<Paragraph>(node.crtrstc).endsWithBlankLine = true;
+		return false;
+	}
 }
-size_t mdpm_parser::matchParagraphLineLite(const std::string_view line, const mdpm_impl::BlobParsingState& state) {
+size_t matchParagraphLineLite(const std::string_view line, const mdpm_impl::BlobParsingState& state) {
 	std::cmatch matches{};
 	if (std::regex_search(line.data() + state.pos, matches, parLineRegex)) {
 		return matches[1].first - matches[0].first;
 	}
 	else {
-		return NPOS;
+		return md_parseman::NPOS;
 	}
 }
 std::regex indentedCodeRegex{ "^(    )|(	)(\\W+)" };
-bool mdpm_parser::findCode(Context& cotx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)
+std::regex indentedCode2Regex{"^( {0,3})( |\\t)?([ \\t]*)([^ \\t])?.*"};
+
+auto findCode(mdpm0_impl::Context& cotx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)->std::optional<IndentedCode>
 {
+#if 0
 	std::cmatch matches{};
 	decltype(matches.length()) pos = currSitu.pos;
-	bool res = std::regex_search(line + pos, matches, indentedCodeRegex);
+	bool res = std::regex_match(line + pos, matches, indentedCodeRegex);
+
+	std::string knit{ line };
+	mdpm_impl::testFunction2(knit, currSitu.pos);
 	if (res) {
+
 		if (matches[2].matched) {
 			pos += (matches[2].second - matches[2].first);
 		}
@@ -182,62 +255,61 @@ bool mdpm_parser::findCode(Context& cotx, MDPMNode& node, const char* line, mdpm
 		currSitu.pos = pos;
 
 	}
+#else
+	auto [spaces, indent, defecit, match, __d] = mdpm_impl::tryIndentedCode(false, *cotx.inp_, currSitu.pos, currSitu.indentDeficit);
+#endif
+	std::optional<IndentedCode> res;
+	if (match) {
+		currSitu.pos += indent;
+		currSitu.indentDeficit = defecit;
+		res.emplace(md_parseman::NPOS, defecit );
+	}
 	return res;
 }
-std::regex indentedCode2Regex{"^( {0,3})( |\\t)?[ \\t]*([^ \\t])?.*"};
-bool mdpm_parser::matchCode(Context& cotx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)
+bool matchCode(mdpm0_impl::Context& cotx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)
 {
-	std::cmatch matches{};
-	decltype(matches.length()) pos = currSitu.pos;
-	bool matchRes{};
-	bool res = std::regex_match(line + pos, matches, indentedCode2Regex);
-	if (res) {
-		if ((matches[0].first == matches[0].second) || !matches[3].matched) {
-			if (matches[2].matched) {
-				pos += (matches[2].second - matches[0].first); // add any additional whitespaces after code-indent prefix if they exist
-			}
-			else {
-				pos += (matches[2].second - matches[0].first); // less than 4 spaces (and no tab present for 3 last char positions) and nothing else: will be transformed to newline only
-			}
-
-			auto& property = std::get<IndentedCode>(node.crtrstc);
-			if (property.firstNewlineSequencePos == mdpm_parser::NPOS) {
-				property.firstNewlineSequencePos = cotx.textBuffer.size();
-			}
-			matchRes = true;
-		}
-		else if (matches[2].matched) {
-			pos += (matches[2].second - matches[0].first);
-
-			auto& property = std::get<IndentedCode>(node.crtrstc);
-			if (property.firstNewlineSequencePos != mdpm_parser::NPOS) {
-				property.firstNewlineSequencePos = mdpm_parser::NPOS;
-			}
-
-			matchRes = true;
-		}
-		if (matchRes) {
-			currSitu.pos = pos;
-			currSitu.matching = true;
-		}
-	}
 #if 0
+	auto [isNonblank, whitspaceLen, indentLen] = mdpm_impl::countWhitespaces(*cotx.inp_, currSitu.pos);
+
+	if (size_t count = 4; count <= indentLen) {
+		auto [spaces, byteSpaces, spacesDeficit] = bumpByLogicalSpaces(*cotx.inp_, count, currSitu.pos);
+		currSitu.pos += spaces;
+		currSitu.indentDeficit = spacesDeficit;
+		return true;
+	}
+	else if (!isNonblank && !node.children.empty()) {
+		auto [spaces, byteSpaces, spacesDeficit] = bumpByLogicalSpaces(*cotx.inp_, indentLen, currSitu.pos);
+		currSitu.pos += spaces;
+		currSitu.indentDeficit = spacesDeficit;
+		return true;
+	}
 	else {
-		MDPMNode* n = &node;
-		n->matching = false;
-		while (!n->children.empty()) {
-			n = &n->children.back();
-			n->matching = false;
+		return false;
+	}
+#else
+	auto [spaces, indent, defecit, matching, nonBlankLine] = mdpm_impl::tryIndentedCode(true, *cotx.inp_, currSitu.pos, currSitu.indentDeficit);
+	if (matching) {
+		currSitu.pos += indent;
+		currSitu.indentDeficit = defecit;
+		std::get<IndentedCode>(node.crtrstc).spacePrefixes = defecit;
+		if (auto& inf = std::get<IndentedCode>(node.crtrstc); !nonBlankLine) {
+			if (inf.firstNewlineSequencePos == md_parseman::NPOS) {
+				inf.firstNewlineSequencePos = cotx.textBuffer.size();
+			}
+		}
+		else {
+			if (inf.firstNewlineSequencePos != md_parseman::NPOS) {
+				inf.firstNewlineSequencePos = md_parseman::NPOS;
+			}
 		}
 	}
 #endif
-	return matchRes;
+	return matching;
 }
 std::regex listRegex("^ {0,3}([-+*]|(\\d\\d{0,8})[.)])? {1,4}( *)");
 std::regex listItemRegex{ "^ {0,3}([-+*]|(\\d\\d{0,8})[.)]) {1,4}( *)" };
-bool mdpm_parser::matchList(Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)
+bool matchList(mdpm0_impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)
 {
-	//std::optional<ListInfo> retValue{};
 	std::cmatch matches{};
 
 	decltype(matches.length()) nSymCons = 0;
@@ -246,31 +318,12 @@ bool mdpm_parser::matchList(Context& ctx, MDPMNode& node, const char* line, mdpm
 
 	if (resi) {
 		if (matches[1].length() != 0) {
-			//retValue.emplace();
-
-#if 0
-			if (matches[2].matched) {
-				auto res = std::from_chars(matches[2].first, matches[2].second, retValue->orderedStart);
-				if (res.ptr != matches[2].second) {
-					std::exit(99);
-				}
-				retValue->symbolUsed = static_cast<ListInfo::symbol_e>(*matches[2].second);
-			}
-#endif
-
-			//spacings[0] = static_cast<char>(matches[1].first - matches[0].first);
-			//spacings[1] = static_cast<char>(matches[1].second - matches[1].first);
-
 			if (matches[3].length() == 0) {
 				nSymCons += matches.length();//` -1;
-				//spacings[2] = static_cast<char>(matches[3].first - matches[1].second);
 			}
 			else {
 				nSymCons += (matches[1].second - matches[0].first + 1);
-				//spacings[2] = 1;
 			}
-
-
 			if (matches[2].matched ) {
 				if (std::get<ListInfo>(node.crtrstc).orderedStart < 0) {
 					currSitu.matching = false;
@@ -298,8 +351,6 @@ bool mdpm_parser::matchList(Context& ctx, MDPMNode& node, const char* line, mdpm
 				currSitu.preCmp = true;
 				currSitu.pos += nSymCons;
 			}
-
-
 		}
 		else {
 			auto& lastChildInfo = std::get<ListItemInfo>(node.children.back().crtrstc);
@@ -316,20 +367,9 @@ bool mdpm_parser::matchList(Context& ctx, MDPMNode& node, const char* line, mdpm
 			}
 		}
 	}
-	if (!matchRes && node.flavor == MDPMNode::type_e::List) {
-		MDPMNode* n = &node;
-#if 0
-		n->matching = false;
-		while (!n->children.empty()) {
-			n = &n->children.back();
-			n->matching = false;
-		}
-#endif
-	}
 	return matchRes;
-	//return retValue;
 }
-auto mdpm_parser::findList(Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu, char(&spacings)[3]) -> std::optional<ListInfo>
+auto findList(mdpm0_impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu, char(&spacings)[3]) -> std::optional<ListInfo>
 {
 	std::cmatch matches{};
 
@@ -339,6 +379,8 @@ auto mdpm_parser::findList(Context& ctx, MDPMNode& node, const char* line, mdpm_
 	bool resi = std::regex_search(line + currSitu.pos, matches, listItemRegex);
 
 	if (resi) {
+		std::string uppi{ line };
+		//mdpm_impl::tryListItem(*ctx.inp_);
 		retValue.emplace();
 
 		if (matches[2].matched) {
@@ -372,121 +414,102 @@ auto mdpm_parser::findList(Context& ctx, MDPMNode& node, const char* line, mdpm_
 
 }
 // If matching, use node's parent and add a new sibling node and close this node.
-auto mdpm_parser::findListItem(Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu) -> std::optional<ListItemInfo>
+auto findListItem(mdpm0_impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu) -> std::optional<std::pair<ListInfo, ListItemInfo>>
 {
+	std::optional<std::pair<ListInfo, ListItemInfo>> fOut{std::nullopt};
+
 	currSitu.matching = false;
-	std::optional<ListItemInfo> retValue{};
-	std::cmatch matches{};
 
-	decltype(matches.length()) pos = currSitu.pos;
-	bool resi = std::regex_search(line + pos/*line2*/, matches, listItemRegex);
+	auto [isNonblank, whitspaceLen, indentLen] = mdpm_impl::countWhitespaces(*ctx.inp_, currSitu.pos);
 
-	if (resi) {
-		retValue.emplace();
-		auto& charact = *retValue; //std::get<ListItemInfo>(newItemNode.crtrstc);
+	size_t potentialByteCost{};
 
-		charact.preIndent = static_cast<char>(matches[1].first - matches[0].first);
-		charact.sizeW = static_cast<char>(matches[1].second - matches[1].first);
+	using memory_input = TAO_PEGTL_NAMESPACE::memory_input<TAO_PEGTL_NAMESPACE::tracking_mode::eager>;
+	using parse_out_t = typename std::invoke_result_t<decltype(mdpm_impl::tryListItem), memory_input&, const size_t, const size_t>;
 
-		if (matches[3].length() == 0) {
-			pos += matches.length() - 1;
-			charact.postIndent = static_cast<char>((matches[3].first - matches[1].second));
-		}
-		else {
-			pos += (matches[1].second - matches[0].first + 1);
-			charact.postIndent = 1;
-		}
+	if ( parse_out_t parseAttempt; indentLen <= 3 and (parseAttempt = mdpm_impl::tryListItem(*ctx.inp_, currSitu.pos, currSitu.indentDeficit)) ) {
+		if (uint8_t c = std::get<5>(*parseAttempt); c == ' ' or c == '\t') {
 
+			ctx.inp_->bump(std::get<2>(*parseAttempt) + std::get<1>(*parseAttempt).sizeW);
 
-		if (matches[2].matched) {
-		}
-		else {
+			auto [isNonblank0, wsLen, iLen] = mdpm_impl::countWhitespaces(*ctx.inp_, currSitu.pos);
+
+			std::get<1>(*parseAttempt).preIndent = indentLen;
+			std::get<1>(*parseAttempt).postIndent = iLen <= 4 ? iLen : 1;
+
+			auto what = bumpByLogicalSpaces(*ctx.inp_, std::get<1>(*parseAttempt).postIndent, currSitu.pos + indentLen + std::get<1>(*parseAttempt).sizeW);
+
+			currSitu.pos += indentLen + std::get<1>(*parseAttempt).sizeW + iLen;
+			currSitu.indentDeficit = std::get<2>(what);
+
+			fOut.emplace(std::move(std::get<0>(*parseAttempt)), std::move(std::get<1>(*parseAttempt)));
 		}
 
-		if (currSitu.targetType != MDPMNode::type_e::ListItem) {
-			currSitu.targetType = MDPMNode::type_e::ListItem;
-		}
-		currSitu.matching = true;
-		currSitu.pos = pos;
 	}
-	return retValue;
+
+	return fOut;
+	//return mdpm_impl::tryListItem(*ctx.inp_);
 }
 std::regex listItemRegex2{"^(  +)\\S"};
-bool mdpm_parser::matchListItem(Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)
+bool matchListItem(mdpm0_impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu)
 {
-	bool resi{};
-	std::cmatch matches{};
-	decltype(matches.length()) pos = currSitu.pos;
-	bool matching{};
 
-	if (currSitu.preCmp) {
-		if (currSitu.matching) {
+	auto [isNonblank, wsCharactersFound, indentsFound] = mdpm_impl::countWhitespaces(*ctx.inp_, currSitu.pos);
 
-			matching = true;
-			currSitu.preCmp = false;
-			currSitu.matching = true;
-			if (currSitu.targetType != MDPMNode::type_e::ListItem) {
-				currSitu.targetType = MDPMNode::type_e::ListItem;
-			}
-		}
-		else {
-			resi = false;
-		}
-		// positioned already, no need to do it again.
-		//return;
+	auto& listState = std::get<ListItemInfo>(node.crtrstc);
+	if (size_t count{}; (count = static_cast<size_t>(listState.preIndent) + listState.sizeW + listState.postIndent) <= indentsFound + currSitu.indentDeficit) {
+		// TODO: please verify that over-indent amount is always LESS-THAN-OR-EQUAL-TO all of listState's indents for every call of this function
+		assert(currSitu.indentDeficit <= count);
+		auto [spaces, byteSpaces, spacesDeficit] = bumpByLogicalSpaces(*ctx.inp_, count - currSitu.indentDeficit, currSitu.pos);
+		currSitu.pos += spaces;
+		currSitu.indentDeficit = spacesDeficit;
+		return true;
+	}
+	else if (!isNonblank && !node.children.empty()) {
+		auto [spaces, byteSpaces, spacesDeficit] = bumpByLogicalSpaces(*ctx.inp_, indentsFound, currSitu.pos);
+		currSitu.pos += spaces;
+		currSitu.indentDeficit = spacesDeficit;
+		return true;
 	}
 	else {
-		resi = std::regex_search(line + pos, matches, listItemRegex2);
+		return false;
 	}
-	decltype(pos) startingPos = 0;
-	decltype(pos) endPos = 0;
 
-	if (resi) {
-		startingPos = matches.position();
-		endPos = matches[1].second - matches[1].first;
-
-		
-		if (currSitu.targetType != MDPMNode::type_e::ListItem) {
-			currSitu.targetType = MDPMNode::type_e::ListItem;
-		}
-
-		auto& listState = std::get<ListItemInfo>(node.crtrstc);
-		if ((listState.preIndent + listState.sizeW + listState.postIndent) <= (endPos - startingPos)) {
-			pos += (listState.preIndent + listState.sizeW + listState.postIndent);
-			matching = true;
-			currSitu.matching = true;
-			currSitu.pos = pos;
-		}
-	}
-	if (!matching && (node.flavor == MDPMNode::type_e::ListItem)) {
-		MDPMNode* n = &node;
-#if 0
-		n->matching = false;
-		while (!n->children.empty()) {
-			n = &n->children.back();
-			n->matching = false;
-		}
-#endif
-	}
-	return matching;
 }
 
-//, std::regex::extended);
+std::tuple<size_t, size_t, size_t> bumpByLogicalSpaces(TAO_PEGTL_NAMESPACE::memory_input<TAO_PEGTL_NAMESPACE::tracking_mode::eager>& input, const size_t logicalSpaceIndent, const size_t absoluteLogicalSpaceOffset) {
+	size_t indentsApplied = 0;
+	size_t bytesConsumed = 0;
+
+	constexpr char TAB_STOP = 4;
+	size_t currIndentPos = absoluteLogicalSpaceOffset;
+
+	uint8_t c{};
+	// TODO check this thingy!
+	while ((c = input.peek_uint8()) && indentsApplied < logicalSpaceIndent && !input.empty() && (c == '\t' || c == ' ')) {
+		char spaceToFill;
+		switch (c) {
+		case ' ': spaceToFill = 1;
+			break;
+		case '\t': spaceToFill = TAB_STOP - (currIndentPos % TAB_STOP);
+			break;
+		}
+		indentsApplied += spaceToFill;
+		currIndentPos += spaceToFill;
+		input.bump();
+		bytesConsumed++;
+	}
+	return {indentsApplied, bytesConsumed, indentsApplied - logicalSpaceIndent};
+}
+
 std::regex blockQuoteRegex("^ {0,3}> ?(.*)");
-bool mdpm_parser::findBlockQuote(Context& cotx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu, bool continuation) {
+bool findBlockQuote(mdpm0_impl::Context& cotx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu, bool continuation) {
 	
+#if 0
 	std::cmatch matches{};
 
 	decltype(matches.length()) pos = currSitu.pos;
-#if 0
-	bool resi{};
-	while (resi = std::regex_search(line + pos, matches, blockQuoteRegex)) {
-		auto matchPos = matches.position();
-		pos += matches.length();
-	}
-#else
 	bool resi = std::regex_search(line + pos, matches, blockQuoteRegex);
-#endif
 
 	if (resi) {
 		pos += matches[1].first - matches[0].first;
@@ -495,151 +518,112 @@ bool mdpm_parser::findBlockQuote(Context& cotx, MDPMNode& node, const char* line
 		}
 		currSitu.matching = true;
 		currSitu.pos = pos;
-		/*
-		if (continuation && node.flavor == MDPMNode::type_e::Quote) {
-			cotx.textBuffer.push_back('\n');
-			_injectText(cotx, node.children.back(), line, std::strlen(line), currSitu.pos);
-		}
-		*/
 	}
-	else if (continuation && node.flavor == MDPMNode::type_e::Quote) {
-		MDPMNode* n = &node;
-#if 0
-		n->matching = false;
-		while (!n->children.empty()) {
-			n = &n->children.back();
-			n->matching = false;
-		}
-#endif
-	}
+	
 	return resi;
+#else
+	return mdpm_impl::tryBlockQuote(*cotx.inp_);
+#endif
+}
+
+std::regex ATXHeadingRegex{"^ {0,3}#+([ \\t]([^#]*)([ \\t]+#+)?)?[ \\t]*"};
+bool findATXHeading(mdpm0_impl::Context& ctx, MDPMNode& node, const char* line, mdpm_impl::BlobParsingState& currSitu) {
+
+#if 0
+	std::cmatch matches{};
+
+	bool matchRes = std::regex_match(line + currSitu.pos, matches, ATXHeadingRegex);
+	std::string liney{ line };
+
+	auto whatwhat = mdpm_impl::testFunction(liney, currSitu.pos);
+	if (matchRes) {
+		decltype(currSitu.pos) nSymbCons = 0;
+
+
+		if (matches[2].matched && (matches[2].first != matches[0].second) && (matches[2].first != matches[2].second)) {
+			nSymbCons += (matches[2].first - matches[0].first);
+			currSitu.bound = matches[2].second - matches[0].first;
+		}
+		else {
+			nSymbCons += (matches[0].second - matches[0].first);
+			currSitu.bound = matches[0].second - matches[0].first;
+		}
+		currSitu.pos += nSymbCons;
+	}
+#endif
+
+	return mdpm_impl::tryBlockQuote(*ctx.inp_);
+}
+
+MDPMNode& pickCorrectAncestor(MDPMNode& parent, const MDPMNode::type_e childTypeTag) {
+	MDPMNode* anc = &parent;
+	if (parent.flavor == MDPMNode::type_e::List and childTypeTag != MDPMNode::type_e::ListItem) {
+		anc = anc->parent;
+	}
+	else {
+		while (anc->isLeaf()) {
+			anc = anc->parent;
+		}
+	}
+	return *anc;
 }
 
 // <OLD>pre: 'node' and its children are all unmatched, but its parent is still matched to 'line' being matched against
 // pre: 'node' is a matched node, but its last child is not matched (and presumably all ancestors of that child)
-MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm_parser::Context& cotx, const std::string& line, mdpm_impl::BlobParsingState& state) {
-	if (node.flavor == MDPMNode::type_e::TextLiteral) {
-		return nullptr;
+
+bool _sameListType(ListInfo& a, ListInfo& b);
+MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm0_impl::Context& cotx, const char * line, mdpm_impl::BlobParsingState& state) {
+	if (node.flavor == MDPMNode::type_e::IndentedCode || node.flavor == MDPMNode::type_e::FencedCode || node.flavor == MDPMNode::type_e::ATXHeading
+		|| node.flavor == MDPMNode::type_e::SetextHeading) {//|| node.flavor == MDPMNode::type_e::Paragraph) {
+		return &node;
 	}
 	MDPMNode* newborn{};
-	//mdpm_impl::BlobParsingState state{};
-	//state.pos = pos;
-	//MDPMNode* ni = &node;
-#if 0
-	while (!ni->children.empty() && ni->matching) {
-		ni = &ni->children.back();
-	}
-#endif
 
 	char listItemWidths[3];
 
-	if (mdpm_parser::findCode(cotx, node, line.c_str(), state)) {
-		if (!node.children.empty()) {
-			MDPMNode* n = &node.children.back();
-#if 0
-			do {
-				n->isOpen = false;
-			} while (!n->children.empty() && (n = &n->children.back()));
-#endif
-		}
-		newborn = &node.children.emplace_back(MDPMNode{ MDPMNode::type_e::IndentedCode, true, cotx.textBuffer.size(), std::string_view{}, &node, std::list<MDPMNode>{
-			/*{MDPMNode::type_e::TextLiteral, true, true, cotx.textBuffer.size(), {}, nullptr, {} }*/
-			}, {IndentedCode{static_cast<size_t>(-1)}} });
-#if 0
-		auto& textNode = node.children.back().children.back();
-		textNode.parent = &node.children.back();
-#endif
-		//_injectText(cotx, node.children.back(), line.data(), line.size(), state.pos);
-	}
-	else if (mdpm_parser::findBlockQuote(cotx, node, line.c_str(), state)) {
-		if (!node.children.empty()) {
-			MDPMNode* n = &node.children.back();
-			//n = ni;
-			do {
-				n->isOpen = false;
-			} while (!n->children.empty() && (n = &n->children.back()));
-		}
-		node.children.emplace_back(MDPMNode{ MDPMNode::type_e::Quote,true, 0, {}, &node, {}, {} });
+	if (auto indCodeInfo = findCode(cotx, node, line, state)) {
+		auto& correctAncestorBlock = pickCorrectAncestor(node, MDPMNode::type_e::IndentedCode);
 
-		newborn = processNodeMatchAnyNew(node.children.back(), cotx, line, state);
+		newborn = &correctAncestorBlock.children.emplace_back(MDPMNode{ MDPMNode::type_e::IndentedCode, true, cotx.textBuffer.size(), std::string_view{}, &correctAncestorBlock, std::list<MDPMNode>{
+			}, *indCodeInfo/*{IndentedCode{static_cast<size_t>(-1)}}*/ });
+	}
+	else if (findBlockQuote(cotx, node, line, state)) {
+
+		auto& correctAncestorBlock = pickCorrectAncestor(node, MDPMNode::type_e::Quote);
+
+		correctAncestorBlock.children.emplace_back(MDPMNode{ MDPMNode::type_e::Quote,true, 0, {}, &correctAncestorBlock, {}, {} });
+
+		newborn = processNodeMatchAnyNew(correctAncestorBlock.children.back(), cotx, line, state);
 	}
 
-	else if (std::optional<ListInfo> result;  (node.flavor != MDPMNode::type_e::List) && (result = mdpm_parser::findList(cotx, node, line.c_str(), state, listItemWidths))) {
-		if (!node.children.empty()) {
-			MDPMNode* n = &node.children.back();
-			bool* cool = new bool{ true };
-			//n = ni;
-			do {
-				n->isOpen = false;
-			} while (!n->children.empty() && (n = &n->children.back()));
-		}
-
-		node.children.push_back({ MDPMNode::type_e::List, true, 0, {}, &node,  {
-			{MDPMNode::type_e::ListItem, true, 0, {}, nullptr, {}, {ListItemInfo{ listItemWidths[0], listItemWidths[1], listItemWidths[2]}}}
-			}, *result
-			});
-		node.children.back().children.back().parent = &node.children.back();
-
-		newborn = processNodeMatchAnyNew(node.children.back().children.back(), cotx, line, state);
-	}
-	else if (auto result = mdpm_parser::findListItem(cotx, node, line.c_str(), state)) {
-		MDPMNode* n = &node.children.back();
+	else if (auto result = findListItem(cotx, node, line, state)) {
 		bool* cool = new bool{ true };
-		//n = ni;
-		do {
-			n->isOpen = false;
-		} while (!n->children.empty() && (n = &n->children.back()));
+		auto& [listTag, listItemTag] = *result;
 
 		if (node.flavor != MDPMNode::type_e::List) {
-			node.children.push_back({ MDPMNode::type_e::List, true, 0, {}, &node, {}, {} });
-			node.children.back().children.push_back({ MDPMNode::type_e::ListItem, true, 0, {}, &node.children.back(), {}, *result });
+			node.children.push_back({ MDPMNode::type_e::List, true, 0, {}, &node, {}, std::move(listTag) });
+			node.children.back().children.push_back({ MDPMNode::type_e::ListItem, true, 0, {}, &node.children.back(), {}, std::move(listItemTag) });
 			newborn = processNodeMatchAnyNew(node.children.back().children.back(), cotx, line, state);
 		}
+		else if (!_sameListType(std::get<ListInfo>(node.crtrstc), listTag)) {
+			node.parent->children.push_back({ MDPMNode::type_e::List, true, 0, {}, node.parent, {}, std::move(listTag) });
+			node.parent->children.back().children.push_back({ MDPMNode::type_e::ListItem, true, 0, {}, &node.parent->children.back(), {}, std::move(listItemTag) });
+			newborn = processNodeMatchAnyNew(node.parent->children.back().children.back(), cotx, line, state);
+		}
 		else {
-			node.children.push_back({ MDPMNode::type_e::ListItem, true, 0, {}, &node, {}, *result });
+			node.children.push_back({ MDPMNode::type_e::ListItem, true, 0, {}, &node, {}, std::move(listItemTag) });
 			newborn = processNodeMatchAnyNew(node.children.back(), cotx, line, state);
 		}
 #if 0
-		if (node.parent) {
-			n = node.parent;
-		}
-		else if (node.flavor == MDPMNode::type_e::Document) {
-			//this must be document root
-			n = &node;
-		}
 		else {
-			n = reinterpret_cast<MDPMNode*>(0xffffffffffffffff);
+			node.children.push_back({ MDPMNode::type_e::ListItem, true, 0, {}, &node, {}, std::move(listItemTag) });
+			newborn = processNodeMatchAnyNew(node.children.back(), cotx, line, state);
 		}
-		if (!n->children.empty()) {
-			auto& e = n->children.back();
-			e.isOpen = false;
-		}
-		n->children.push_back({});
-
 #endif
 	}
-	/*
-	else if( mdpm_parser::matchParagraphLineNew(cotx, node, line.c_str(), state) ){
-		
-		if (!node.children.empty()) {
-			MDPMNode* n = &node.children.back();
-			do {
-				n->isOpen = false;
-			} while (!n->children.empty() && (n = &n->children.back()));
-		}
-
-		newborn = &node.children.emplace_back(MDPMNode{ MDPMNode::type_e::Paragraph, true, true, cotx.textBuffer.size(), {}, &node, {
-			/*{MDPMNode::type_e::TextLiteral, true, true, cotx.textBuffer.size(), {}, nullptr, {} }*//*
-			} });
-//#if 0
-		auto& textNode = node.children.back().children.back();
-		textNode.parent = &node.children.back();
-
-		cotx.textBuffer.insert(cotx.textBuffer.end(), std::begin(line) + state.pos, std::cend(line));
-		textNode.body = std::string_view{cotx.textBuffer.data() + textNode.posptr, cotx.textBuffer.size() - textNode.posptr};
-//#endif
-		_injectText(cotx, node.children.back(), line.c_str(), line.size(), state.pos);
-	}*/
+	else if (findATXHeading(cotx, node, line, state)) {
+		newborn = &node.children.emplace_back(MDPMNode{ MDPMNode::type_e::ATXHeading, true, cotx.textBuffer.size(), {}, &node, {}, {} });
+	}
 	else {
 		if (node.flavor == MDPMNode::type_e::ListItem) {
 			newborn = &node;
@@ -648,72 +632,144 @@ MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm_parser::Context& cotx, con
 			newborn = &node;
 		}
 	}
-#if 0
-	auto it = node.children.end();
-	if ((it != node.children.begin()) && !(--it)->matching) {
-		return &(*it);
-	}
-#endif
-	return newborn;//node.children.end();
+	return newborn;
 }
-void _injectText(mdpm_parser::Context& ctx, MDPMNode& node, const char* str, size_t len, size_t strpos) {
-	ctx.textBuffer.insert(ctx.textBuffer.end(), str + strpos, str+len);
+bool _sameListType(ListInfo& a, ListInfo& b) {
+	return a.symbolUsed == b.symbolUsed;
+}
+
+void _injectText(mdpm0_impl::Context& ctx, MDPMNode& node, const char* str, size_t len, size_t strpos, bool appendNewline) {
+	auto chunk = mdpm_impl::getTextData(*ctx.inp_);
+
+	if (uint8_t nSpaces; node.flavor == MDPMNode::type_e::IndentedCode and (nSpaces = std::get<IndentedCode>(node.crtrstc).spacePrefixes)) {
+		static const char spaces[] = "   ";
+		ctx.textBuffer.insert(ctx.textBuffer.end(), spaces, spaces + nSpaces);
+	}
+
+	ctx.textBuffer.insert(ctx.textBuffer.end(), chunk.first, chunk.first + chunk.second);
+	if (appendNewline && false) {
+		ctx.textBuffer.push_back('\n');
+	}
 	node.body = { ctx.textBuffer.data() + node.posptr, ctx.textBuffer.size() - node.posptr };
 }
-MDPMNode* resolveNode(MDPMNode* n) {
+MDPMNode* resolveNode(MDPMNode* n, std::vector<char>& buffer) {
 	n->isOpen = false;
+
+	if (n->flavor == MDPMNode::type_e::IndentedCode) {
+		auto& blockProperty = std::get<IndentedCode>(n->crtrstc);
+		if (blockProperty.firstNewlineSequencePos != md_parseman::NPOS) {
+			buffer.resize(blockProperty.firstNewlineSequencePos);
+			n->body = { buffer.data() + n->posptr, buffer.size() - n->posptr };
+			blockProperty.firstNewlineSequencePos = md_parseman::NPOS;
+		}
+	}
+
 	return n->parent;
 }
 
-void resolveDematchedChainLinksExtractText(mdpm_parser::Context& cotx, 
+void resolveDematchedChainLinksExtractText(mdpm0_impl::Context& cotx, 
 	                                   MDPMNode* matchedChainLinkTail, 
 	                                   MDPMNode* boilingChainLinkTail, 
 	                                mdpm_impl::BlobParsingState state, 
 	                                         const std::string_view s) 
 {
+	size_t firstNonWhitespace = /*0;// = static_cast<size_t>(-1);
+	size_t lineHasParagraph = */mdpm_impl::checkNonBlank(*cotx.inp_);// (firstNonWhitespace = matchParagraphLineLite(s, state)) != md_parseman::NPOS;
+	//firstNonWhitespace = lineHasParagraph;
+	bool lineHasParagraph = firstNonWhitespace != md_parseman::NPOS;
+
 	MDPMNode* newborn{};
-	while (cotx.freshestBlock != matchedChainLinkTail) {
-		cotx.freshestBlock = resolveNode(cotx.freshestBlock);
-	}
-	if (boilingChainLinkTail->flavor == MDPMNode::type_e::IndentedCode) {
-		//cotx.textBuffer.push_back('\n');
-		_injectText(cotx, *boilingChainLinkTail, s.data(), s.size(), state.pos);
-	}
-	else if (boilingChainLinkTail->flavor == MDPMNode::type_e::Paragraph) {
-		auto indentSize = mdpm_parser::matchParagraphLineLite(s, state);
-		if (indentSize != mdpm_parser::NPOS) {
-			cotx.textBuffer.push_back('\n');
-			_injectText(cotx, *boilingChainLinkTail, s.data(), s.size(), state.pos);
-		}
-	}
-	else if (mdpm_parser::matchParagraphLineLite(s, state) == mdpm_parser::NPOS) {
-		//nothing
+	if (cotx.freshestBlock != matchedChainLinkTail &&
+		matchedChainLinkTail == boilingChainLinkTail /* empty boiling chain link */ &&
+		cotx.freshestBlock->flavor == MDPMNode::type_e::Paragraph &&
+		lineHasParagraph)
+	{ 
+		_injectText(cotx, *cotx.freshestBlock, s.data(), s.size(), state.pos, true); // This line is a lazy-continuation line; add text-only portion of line and move on
 	}
 	else {
-		newborn = &boilingChainLinkTail->children.emplace_back(MDPMNode{ MDPMNode::type_e::Paragraph, true, cotx.textBuffer.size(), {}, boilingChainLinkTail, {} });
-		_injectText(cotx, *newborn, s.data(), s.size(), state.pos);
-		boilingChainLinkTail = newborn;
-	}
-	cotx.freshestBlock = boilingChainLinkTail;
+		while (cotx.freshestBlock != matchedChainLinkTail) {
+			cotx.freshestBlock = resolveNode(cotx.freshestBlock, cotx.textBuffer);
+		}
+		if (boilingChainLinkTail->flavor == MDPMNode::type_e::IndentedCode) {
+			_injectText(cotx, *boilingChainLinkTail, s.data(), s.size(), state.pos, true);
+		}
+		else if (boilingChainLinkTail->flavor == MDPMNode::type_e::Paragraph and lineHasParagraph) {
+			auto indentSize = firstNonWhitespace;
+			//if (indentSize != md_parseman::NPOS) {
+				//cotx.textBuffer.push_back('\n');
+				_injectText(cotx, *boilingChainLinkTail, s.data(), s.size(), /*state.pos*/indentSize);
+			//}
+		}
+		else if (boilingChainLinkTail->flavor == MDPMNode::type_e::ATXHeading) {
+			assert(state.bound <= s.size());
+			_injectText(cotx, *boilingChainLinkTail, s.data(), state.bound, state.pos, true);
+		}
+		else if (!lineHasParagraph) {
+			//nothing
+			mdpm_impl::consumeResidualWsNl(*cotx.inp_);
+		}
+		else {
+			auto& correctAncestorBlock = pickCorrectAncestor(*boilingChainLinkTail, MDPMNode::type_e::Paragraph);
+			newborn = &correctAncestorBlock.children.emplace_back(MDPMNode{ MDPMNode::type_e::Paragraph, true, cotx.textBuffer.size(), {}, &correctAncestorBlock, {}, Paragraph{false} });
+			cotx.inp_->bump(firstNonWhitespace);
+			_injectText(cotx, *newborn, s.data(), s.size(), firstNonWhitespace);
+			boilingChainLinkTail = newborn;
+		}
 
+		cotx.freshestBlock = boilingChainLinkTail;
+	}
 }
 
-
-void mdpm_parser::processLine(Context& cotx, MDPMNode& node, std::istream& inp) {
+void md::processLine(mdpm0_impl::Context& cotx, MDPMNode& node, std::istream& inp) {
 	mdpm_impl::BlobParsingState sam{};
 	for (std::string line; std::getline(inp, line, '\n');) {
-		matchParagraphLineNew(cotx, node, line.c_str(), sam);
+		//matchParagraphLineNew(cotx, node, line.c_str(), sam);
 	}
 }
 
-void mdpm_parser::processLine(Context& cotx, MDPMNode& root, const std::string& line) {
+bool md::Parser::processLine(std::istream& in) {
+	bool res{};
+	if (std::getline(in, currLine_)) {
+		currLine_.push_back('\n');
+		ctx_->inp_.emplace(currLine_, "currLine_");
+		mdpm_impl::BlobParsingState lineState{};
+		auto* matchChainLinkTail = processNodeMatchExisting(*root_, *ctx_, currLine_.c_str(), lineState);
+		MDPMNode* newborn = processNodeMatchAnyNew(*matchChainLinkTail, *ctx_, currLine_.c_str(), lineState);
+
+		resolveDematchedChainLinksExtractText(*ctx_, matchChainLinkTail, newborn, lineState, currLine_);
+		latestBlock_ = ctx_->freshestBlock;
+		ctx_->inp_.reset();
+		res = true;
+	}
+	return res;
+}
+
+bool md::Parser::processLine() {
+	mdpm_impl::BlobParsingState lineState{};
+	auto* matchChainLinkTail = processNodeMatchExisting(*root_, *ctx_, nullptr, lineState);
+#if 0
+	for (MDPMNode* ptr = matchChainLinkTail; ptr != nullptr and !ptr->children.empty(); ptr = &ptr->children.back()) {
+		if (ptr->children.back().flavor == MDPMNode::type_e::Paragraph) {
+			//std::get<Paragraph>(ptr->children.back().crtrstc).endsWithBlankLine = true;
+		}
+	}
+#endif
+	std::string_view str{ "null" };
+	MDPMNode* newbornContainer = processNodeMatchAnyNew(*matchChainLinkTail, *ctx_, nullptr, lineState);
+
+
+	resolveDematchedChainLinksExtractText(*ctx_, matchChainLinkTail, newbornContainer, lineState, str);
+	latestBlock_ = ctx_->freshestBlock;
+	//bool huh = mdpm_impl::consumeResidualWsNl(*ctx_->inp_); //should be consuming exactly one newline every iteration of this function
+	return !ctx_->inp_->empty();
+}
+
+void md::processLine(mdpm0_impl::Context& cotx, MDPMNode& root, const std::string& line) {
 	mdpm_impl::BlobParsingState state{};
-	std::vector<mdpm_impl::NodeQry> depthStack{};
-	depthStack.reserve(8);
-	auto * matchChainLinkTail = processNodeMatchExisting(root, cotx, line, state);
+	auto * matchChainLinkTail = processNodeMatchExisting(root, cotx, line.c_str(), state);
 	MDPMNode* nodeptr = &root;
 
-	MDPMNode * newborn = processNodeMatchAnyNew(*matchChainLinkTail/*nodeptr*/, cotx, line, state);
+	MDPMNode * newborn = processNodeMatchAnyNew(*matchChainLinkTail, cotx, line.c_str(), state);
 
 	resolveDematchedChainLinksExtractText(cotx, matchChainLinkTail, newborn, state, line);
 }

@@ -1,0 +1,10 @@
+ 1.    Hi
+  		Paragraph with three extra spaces
+
+  1)	Hi again. Paragraph with one tab equaling 3 extra indents
+	 	Paragraph with one tab equaling 3 extra indents
+               Paragraph with two extra spaces
+     Non-indented Paragraph
+
+     Anonther paragraph
+	 Red Fox

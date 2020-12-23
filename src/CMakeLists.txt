@@ -3,39 +3,57 @@
 #
 cmake_minimum_required (VERSION 3.8)
 
-find_package(nlohmann_json CONFIG REQUIRED)
 find_package(cxxopts CONFIG REQUIRED)
-find_package(fmt CONFIG REQUIRED)
+find_package(pegtl CONFIG REQUIRED)
 
 # Add source to this project's executable.
-add_executable (MDParseMan "MDParseMan.cpp" "MDParseMan.h" "Parser.cpp" "TFrame.cpp")
+add_library (MDParseMan SHARED MDParseImpl.h Parser.cpp MDParseImpl.cpp "${CMAKE_SOURCE_DIR}/include/md_parseman/MDParseMan.h" "HTMLExport.cpp" "NodeIterator.cpp")
+include(GenerateExportHeader)
+generate_export_header(MDParseMan)
+target_include_directories(MDParseMan PUBLIC "${CMAKE_SOURCE_DIR}/include" $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/src>)
+target_link_libraries(MDParseMan PRIVATE taocpp::pegtl)
+target_compile_features(MDParseMan PUBLIC cxx_std_20)
 
-target_link_libraries(MDParseMan PRIVATE nlohmann_json::nlohmann_json cxxopts::cxxopts fmt::fmt)
-target_compile_features(MDParseMan PRIVATE cxx_std_20)
+add_executable (mdsprig "mdsprig.cpp" "TFrame.cpp")
+target_link_libraries(mdsprig PRIVATE cxxopts::cxxopts MDParseMan)
+target_include_directories(mdsprig PUBLIC "${CMAKE_SOURCE_DIR}/include" )
+target_compile_features(mdsprig PRIVATE cxx_std_20)
+
+
+if(WIN32 AND USE_OSS_MICROSOFT_STL)
+ message(STATUS "Using OSS Microsoft STL library and headers")
+ set(CMAKE_VS_JUST_MY_CODE_DEBUGGING 1)
+ if(NOT MICROSOFT_STL_BINARY_DIR)
+  message(SEND_ERROR "Please specify build root with -DMICROSOFT_STL_BINARY_DIR")
+ endif()
+ if(NOT MICROSOFT_STL_ARCHITECTURE_NAME)
+  message(SEND_ERROR "Please specify the -DMICROSOFT_STL_ARCHITECTURE_NAME directory name that holds the library and library binaries (e.g. 'arm64')")
+ endif()
+
+ target_include_directories(MDParseMan SYSTEM BEFORE PUBLIC ${MICROSOFT_STL_BINARY_DIR}/out/inc)
+ target_include_directories(mdsprig SYSTEM BEFORE PRIVATE ${MICROSOFT_STL_BINARY_DIR}/out/inc)
+
+ add_library(msvcprt SHARED IMPORTED)
+ set_target_properties(msvcprt PROPERTIES IMPORTED_IMPLIB ${MICROSOFT_STL_BINARY_DIR}/out/lib/${MICROSOFT_STL_ARCHITECTURE_NAME}/msvcprt.lib)
+ set_target_properties(msvcprt PROPERTIES IMPORTED_IMPLIB_DEBUG ${MICROSOFT_STL_BINARY_DIR}/out/lib/${MICROSOFT_STL_ARCHITECTURE_NAME}/msvcprtd.lib)
+ set_target_properties(msvcprt PROPERTIES IMPORTED_LOCATION ${MICROSOFT_STL_BINARY_DIR}/out/bin/${MICROSOFT_STL_ARCHITECTURE_NAME})
+ target_link_libraries(MDParseMan PUBLIC msvcprt)
+ target_link_libraries(mdsprig PRIVATE msvcprt)
+else()
+ message(STATUS "Using cxx standard library and headers from default toolset")
+endif()
 
 if(NOT CMAKE_HOST_WIN32)
 	set(CMAKE_HOST_WIN32 $<NOT:${CMAKE_HOST_UNIX}>)
 endif()
-add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<IF:${CMAKE_HOST_WIN32},copy /b,cp>")
 
-#message(WARNING $<IF:$<CONFIG:Debug>, hello, goodbye> )
-set(COPY_COMMAND "$<IF:${CMAKE_HOST_WIN32},copy,cp>")
-#if(CMAKE_HOST_WIN32)
-#set(COPY_COMMAND copy /b)
-#else()
-#set(COPY_COMMAND cp)
-#endif()
+set(COPY_CMD "$<IF:${CMAKE_HOST_WIN32},copy,cp>")
 
-add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/src/test.txt
-COMMAND ${COPY_COMMAND} $<SHELL_PATH:${CMAKE_SOURCE_DIR}/rud_test/test.txt> $<SHELL_PATH:${CMAKE_BINARY_DIR}/src>)
-add_custom_command(TARGET MDParseMan PRE_BUILD
-COMMAND ${COPY_COMMAND} $<SHELL_PATH:${CMAKE_SOURCE_DIR}/rud_test/Testy.txt> $<SHELL_PATH:${CMAKE_BINARY_DIR}/src>)
-add_custom_command(TARGET MDParseMan PRE_BUILD
-COMMAND ${COPY_COMMAND} $<SHELL_PATH:${CMAKE_SOURCE_DIR}/rud_test/Markdawny.txt> $<SHELL_PATH:${CMAKE_BINARY_DIR}/src>)
-add_custom_command(TARGET MDParseMan PRE_BUILD
-COMMAND ${COPY_COMMAND} $<SHELL_PATH:${CMAKE_SOURCE_DIR}/rud_test/Markdawny2.txt> $<SHELL_PATH:${CMAKE_BINARY_DIR}/src>)
-
-add_custom_target(TestingTarg DEPENDS ${CMAKE_BINARY_DIR}/src/test.txt)
-add_dependencies(MDParseMan TestingTarg)
+if(WIN32 AND USE_OSS_MICROSOFT_STL)
+ add_custom_command(TARGET mdsprig POST_BUILD
+ COMMAND ${COPY_CMD} $<SHELL_PATH:${MICROSOFT_STL_BINARY_DIR}/out/bin/${MICROSOFT_STL_ARCHITECTURE_NAME}/msvcp140$<IF:$<CONFIG:Debug>,d,"">_oss.dll> $<SHELL_PATH:$<TARGET_FILE_DIR:mdsprig>>
+)
+endif()
 
 # TODO: Add tests and install targets if needed.
+

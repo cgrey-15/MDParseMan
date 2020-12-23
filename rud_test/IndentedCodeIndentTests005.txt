@@ -1,0 +1,29 @@
+IIIoIIIoIIIo
+
+* H
+
+	 Not Indented Code tab space
+ 
+h
+p
+q
+
+   Not Indented code space-space-space
+
+h
+r
+
+ 	Indented Code space tab
+
+h
+m
+r
+
+  	Indented Code space-space tab
+
+h
+n
+
+   	Indented Code space-space-space tab
+
+h

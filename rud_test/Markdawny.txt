@@ -1,25 +1,19 @@
-    This is the first code block
-    Check again!
- 	This is a valid indented code line X3
-  	Again...
-   	Once...again.
-
- 
-  
+    This is code
    
-    
-   		
- 		This is more valid indented code;
-	Final code block
-
-This should be a paragraph now.
-Bye then.
+      This is still code
+    Okay bye
 
 > This is a block quote
 > but I don't know why
 >
 > This is another paragraph
 > but ehhhhh...
+
+   	This is code
+	Hello???
+  	Coding is good
+       This is cool
+ 	Very cool
 
 This is your captain speaking. I announce
 that takeoff is just abound. Enjoy your flight.
