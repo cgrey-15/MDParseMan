@@ -2,3 +2,4 @@
 out
 build
 *.swp
+/CMakeSettings.json

@@ -80,7 +80,7 @@ MAIN_DEPENDENCY ${MD_PARSEMAN_TEST_JSON_LABEL}.json DEPENDS markdown_gentest)
 
 add_executable(MDParseManTest  MarkdownTestGenerated.cpp)
 target_compile_features(MDParseManTest PRIVATE cxx_std_20)
-target_link_libraries(MDParseManTest PRIVATE MDParseMan gtest_main)
+target_link_libraries(MDParseManTest PRIVATE MDParseMan gtest_main gmock)
 
 if(NOT CMAKE_HOST_WIN32)
  set(CMAKE_HOST_WIN32 $<NOT:${CMAKE_HOST_UNIX}>)
