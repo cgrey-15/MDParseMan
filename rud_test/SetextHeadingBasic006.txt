@@ -1,0 +1,2 @@
+Not a setext heading 006
+    ===

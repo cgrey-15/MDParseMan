@@ -1,0 +1,7 @@
+- A regular list item 010
+- 
+  A list item 010
+
+- 
+  > a list item containing a block quote 010
+

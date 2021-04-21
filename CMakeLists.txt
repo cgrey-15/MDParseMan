@@ -16,6 +16,7 @@ endif()
 add_subdirectory(src)
 if(MD_PARSEMAN_ENABLE_TESTING)
  add_subdirectory(test)
+ enable_testing()
 endif()
 
 

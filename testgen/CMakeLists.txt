@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 set(CMAKE_BUILD_TYPE RelWithDebInfo)
+set(CMAKE_CONFIGURATION_TYPES RelWithDebInfo Debug)
+
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)

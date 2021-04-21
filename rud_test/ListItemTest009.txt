@@ -1,0 +1,3 @@
+* list 009
+	1. ordered list; preindent is 2; deficit is 2 after matching prev list;
+should elicit program behavior identical to prev test.

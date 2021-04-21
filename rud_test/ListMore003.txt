@@ -1,0 +1,15 @@
+1. list 003
+2. item 2, list 003
+   * sub-list, item 2, list 003
+   * sub-item 2, list 003
+   * 1) sub-sub-list, sub-item 3, list 003
+        line 2, sub-sub-item 1, sub-item 3, list 003
+    	 	   	 	
+		line 1, sub-sub-item 1, sub-item 3, list 003
+        line 2, sub-sub-item 1 END, sub-item 3, list 003
+	 2) sub-sub-item 2 END, sub-item 3, list 003
+   * sub-item 3 END, list 003
+3. item 3, list 003
+4. item 4, list 003
+5. item 5, list 003
+6. item 6, list 003 end

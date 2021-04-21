@@ -1,0 +1,6 @@
+* list item 004
+  continuation
+
+*
+
+* third list item 005

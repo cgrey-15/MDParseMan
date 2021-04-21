@@ -1,0 +1,13 @@
+1. list 004
+2. item 2, list 004
+   * sub-list, item 2, list 004
+   * sub-item 2, list 004
+   * 1) sub-sub-list, sub-item 3, list 004
+	 2) sub-sub-item 2, sub-item 3, list 004
+     3)
+     4) sub-sub-item 4, sub-item 3, list 004
+   * sub-item 3 END, list 004
+3. item 3, list 004
+4. item 4, list 004
+5. item 5, list 004
+6. item 6, list 004 end

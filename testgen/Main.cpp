@@ -18,6 +18,8 @@ template<char OldVal, char NewVal, bool NeedEscape>
 void escapeBackslashString(std::string& str);
 void removeChar(std::string& str, char c);
 
+std::string getPrettyStrLiteral(const std::string& src, const size_t preIndent, const size_t padding);
+
 int main(int argc, char** argv) {
 	if (argc != 2) {
 		std::cerr << "INVALID args\n";
@@ -75,11 +77,22 @@ std::string func(nlohmann::json& jc, int indentLvl) {
 
 std::string body_(nlohmann::json::const_iterator it, size_t n, int indentLvl) {
 	std::string res{};
-	//std::cout << "Section: \"" << (*it)["section"].get_ref<const std::string&>() << "\"\nn: " << n << "\n\n";
-	//std::cerr << "??? " << n << "\n";
 	for (size_t i = 0; i < n; ++i) {
-		res.append(fmt::format("{0: <{4}}auto str{3:0>4d} = md_parseman::mdToHtml(\"{1}\");\n"
-			"{0: <{4}}EXPECT_STREQ(str{3:0>4d}.c_str(), \"{2}\");\n\n", "", (*it)["markdown"], (*it)["html"], (*it)["example"].get<unsigned int>(), indentLvl * 4));
+
+		constexpr int strASize = std::string_view{"auto strXXXX = md_parseman::mdToHtml("}.size();
+		int preIndentA = (indentLvl * 4) + strASize;
+		int paddingA = 0;
+		while ((preIndentA + paddingA) % 4 != 3) { ++paddingA; }
+		std::string finalMarkdownStr = getPrettyStrLiteral((*it)["markdown"].get_ref<const std::string&>(), preIndentA + paddingA, /*paddingA*/0);
+
+		constexpr int strBSize = std::string_view{"EXPECT_STREQ(strXXXX.c_str(), "}.size();
+		int preIndentB = (indentLvl * 4) + strBSize;
+		int paddingB = 0;
+		while ((preIndentB + paddingB) % 4 != 3) { ++paddingB; }
+		std::string finalMarkdownStrB = getPrettyStrLiteral((*it)["html"].get_ref<const std::string&>(), preIndentB + paddingB, /*paddingB*/0);
+
+		res.append(fmt::format("{0: <{4}}auto str{3:0>4d} = md_parseman::mdToHtml({0: >{5}}\"{1}\");\n\n"
+			"{0: <{4}}EXPECT_STREQ(str{3:0>4d}.c_str(), {0: >{6}}\"{2}\");\n\n", "", finalMarkdownStr, finalMarkdownStrB, (*it)["example"].get<unsigned int>(), indentLvl * 4, paddingA, paddingB));
 		++it;
 	}
 	return res;
@@ -133,4 +146,36 @@ void removeChar(std::string& str, char c) {
 			break;
 		}
 	}
+}
+
+std::string getPrettyStrLiteral(const std::string& src, const size_t preIndent, const size_t padding) {
+	std::string finalMarkdownStr{};
+	std::string skippedStr{};
+	bool consumedFirstNewline = false;
+	for (size_t j = src.find('\\'), i = static_cast<size_t>(0); j != std::string::npos; i = j + 2, j = src.find('\\', j + 2)) {
+
+		if (src[j + 1] != 'n') {
+			skippedStr.append(src.cbegin() + i, src.cbegin() + j + 2);
+		}
+		else {
+			if (consumedFirstNewline) {
+				finalMarkdownStr.append(preIndent + padding, ' ');
+				finalMarkdownStr.push_back('"');
+			}
+			else {
+				finalMarkdownStr.append(padding, ' ');
+			}
+			consumedFirstNewline = true;
+			finalMarkdownStr.append(skippedStr);
+			skippedStr.clear();
+			finalMarkdownStr.append(src.cbegin() + i, src.cbegin() + j + 2);
+			if (src.cbegin() + j + 2 != src.cend()) {
+				finalMarkdownStr.append("\"\n");
+			}
+			else {
+				//finalMarkdownStr.append("\"");
+			}
+		}
+	}
+	return finalMarkdownStr;
 }

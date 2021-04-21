@@ -29,7 +29,9 @@ endif()
 
 find_package(Python3 COMPONENTS Interpreter)
 
-set(MD_PARSEMAN_TEST_NAMES FirstTests,3 IndentedCodeIndentTests,3 SimpleParagraphTests,3 NestedParagraphTests,3
+set(MD_PARSEMAN_TEST_NAMES FirstTests,3 IndentedCodeIndentTests,3 SimpleParagraphTests,3 NestedParagraphTests,3 ListItemTest,3 MoreListItemTest,3 ThematicBreakBasic,3
+ThematicBreakMore,3 ListBasic,3 ListMore,3 SetextHeadingBasic,3 SetextHeadingMore,3 ATXHeadingBasic,3 ATXHeadingMore,3 FencedCodeBasic,3 FencedCodeMore,3
+#set(MD_PARSEMAN_TEST_NAMES ListItemTest,3
      CACHE STRING "default tests search for followed by numbers telling how many digits that name uses (formatted like 'test_name7777.txt')")
 set(MD_PARSEMAN_TEST_JSON_LABEL md_parseman_tests_in CACHE STRING "default json name to generate tests")
 set(MD_PARSEMAN_TEST_WORKING_DIR ../rud_test/ CACHE PATH "directory where test text files are located")
@@ -76,7 +78,11 @@ add_custom_command(OUTPUT ${MD_PARSEMAN_TEST_JSON_LABEL}.json
 
 add_custom_command(OUTPUT MarkdownTestGenerated.cpp
 COMMAND markdown_gentest ARGS ${MD_PARSEMAN_TEST_JSON_LABEL}.json 
-MAIN_DEPENDENCY ${MD_PARSEMAN_TEST_JSON_LABEL}.json DEPENDS markdown_gentest)
+MAIN_DEPENDENCY ${MD_PARSEMAN_TEST_JSON_LABEL}.json DEPENDS markdown_gentest ${MD_PARSEMAN_TEST_FILE_OUTPUTS})
+
+if(WIN32 AND USE_OSS_MICROSOFT_STL)
+ set(CMAKE_VS_JUST_MY_CODE_DEBUGGING 1)
+endif()
 
 add_executable(MDParseManTest  MarkdownTestGenerated.cpp)
 target_compile_features(MDParseManTest PRIVATE cxx_std_20)
@@ -87,16 +93,15 @@ if(NOT CMAKE_HOST_WIN32)
 endif()
 set(COPY_CMD "$<IF:${CMAKE_HOST_WIN32},copy,cp>")
 
-add_custom_command(TARGET MDParseManTest POST_BUILD
- COMMAND ${COPY_CMD} $<SHELL_PATH:$<TARGET_FILE:MDParseMan>> $<SHELL_PATH:$<TARGET_FILE_DIR:MDParseManTest>>#${CMAKE_BINARY_DIR}/test>
-)
+
 if(WIN32 AND USE_OSS_MICROSOFT_STL)
+ set(CMAKE_VS_JUST_MY_CODE_DEBUGGING 1)
  target_include_directories(MDParseManTest SYSTEM BEFORE PRIVATE ${MICROSOFT_STL_BINARY_DIR}/out/inc)
  target_link_libraries(MDParseManTest PRIVATE msvcprt)
-
  add_custom_command(TARGET MDParseManTest POST_BUILD
   COMMAND ${COPY_CMD} $<SHELL_PATH:${MICROSOFT_STL_BINARY_DIR}/out/bin/${MICROSOFT_STL_ARCHITECTURE_NAME}/msvcp140$<IF:$<CONFIG:Debug>,d,"">_oss.dll> $<SHELL_PATH:$<TARGET_FILE_DIR:MDParseManTest>>
  )
 endif()
+
 
 add_test(NAME markdown_test COMMAND MDParseManTest)

@@ -3,26 +3,39 @@
 #
 cmake_minimum_required (VERSION 3.8)
 
-find_package(cxxopts CONFIG REQUIRED)
 find_package(pegtl CONFIG REQUIRED)
+find_package(CLI11 CONFIG REQUIRED)
+
+if(WIN32 AND USE_OSS_MICROSOFT_STL)
+ set(CMAKE_VS_JUST_MY_CODE_DEBUGGING 1)
+endif()
 
 # Add source to this project's executable.
-add_library (MDParseMan SHARED MDParseImpl.h Parser.cpp MDParseImpl.cpp "${CMAKE_SOURCE_DIR}/include/md_parseman/MDParseMan.h" "HTMLExport.cpp" "NodeIterator.cpp")
+set(MD_PARSEMAN_SOURCES
+MDParseImpl.h 
+"BlockLogic.cpp" 
+MDParseImpl.cpp
+"${CMAKE_SOURCE_DIR}/include/md_parseman/MDParseMan.h"
+"${CMAKE_SOURCE_DIR}/include/md_parseman/BlockInfoTags.h"
+"${CMAKE_SOURCE_DIR}/include/md_parseman/IntegralTypes.h"
+HTMLExport.cpp
+"NodeIterator.cpp"
+)
+add_library (MDParseMan SHARED ${MD_PARSEMAN_SOURCES})#MDParseImpl.h Parser.cpp MDParseImpl.cpp "${CMAKE_SOURCE_DIR}/include/md_parseman/MDParseMan.h" "${CMAKE_SOURCE_DIR}/include/md_parseman/BlockInfoTags.h" "HTMLExport.cpp" "NodeIterator.cpp")
 include(GenerateExportHeader)
 generate_export_header(MDParseMan)
 target_include_directories(MDParseMan PUBLIC "${CMAKE_SOURCE_DIR}/include" $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/src>)
 target_link_libraries(MDParseMan PRIVATE taocpp::pegtl)
 target_compile_features(MDParseMan PUBLIC cxx_std_20)
 
-add_executable (mdsprig "mdsprig.cpp" "TFrame.cpp")
-target_link_libraries(mdsprig PRIVATE cxxopts::cxxopts MDParseMan)
+add_executable (mdsprig "mdsprig.cpp" )
+target_link_libraries(mdsprig PRIVATE CLI11::CLI11 MDParseMan)
 target_include_directories(mdsprig PUBLIC "${CMAKE_SOURCE_DIR}/include" )
 target_compile_features(mdsprig PRIVATE cxx_std_20)
 
 
 if(WIN32 AND USE_OSS_MICROSOFT_STL)
  message(STATUS "Using OSS Microsoft STL library and headers")
- set(CMAKE_VS_JUST_MY_CODE_DEBUGGING 1)
  if(NOT MICROSOFT_STL_BINARY_DIR)
   message(SEND_ERROR "Please specify build root with -DMICROSOFT_STL_BINARY_DIR")
  endif()
@@ -48,6 +61,13 @@ if(NOT CMAKE_HOST_WIN32)
 endif()
 
 set(COPY_CMD "$<IF:${CMAKE_HOST_WIN32},copy,cp>")
+
+add_custom_command(TARGET MDParseMan POST_BUILD
+ COMMAND ${COPY_CMD} $<SHELL_PATH:$<TARGET_FILE:MDParseMan>>  $<SHELL_PATH:${CMAKE_BINARY_DIR}/test>#${CMAKE_BINARY_DIR}/test>
+)
+add_custom_command(TARGET MDParseMan POST_BUILD
+ COMMAND ${COPY_CMD} $<SHELL_PATH:$<TARGET_PDB_FILE:MDParseMan>> $<SHELL_PATH:${CMAKE_BINARY_DIR}/test>#${CMAKE_BINARY_DIR}/test>
+)
 
 if(WIN32 AND USE_OSS_MICROSOFT_STL)
  add_custom_command(TARGET mdsprig POST_BUILD

@@ -44,6 +44,7 @@ struct ListInfo {
 	char orderedStartLen;
 	symbol_e  symbolUsed;
 	int32_t orderedStart;
+	bool isTight;
 };
 
 struct IndentedCode {
@@ -51,8 +52,29 @@ struct IndentedCode {
 	uint8_t spacePrefixes;
 };
 
+struct FencedCode {
+	enum class symbol_e : char {
+		Tilde = '~', BackTick = '`'
+	};
+	md_parseman::Int     length;
+	symbol_e               type;
+	md_parseman::TinyInt indent;
+};
+
+constexpr auto sizei = sizeof(FencedCode);
+
 struct Paragraph {
 	bool endsWithBlankLine;
 };
+
+struct Heading {
+	char lvl;
+	bool isSetext;
+};
+
+namespace md_parseman {
+
+
+}
 
 #endif

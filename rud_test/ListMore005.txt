@@ -1,0 +1,13 @@
+1. list 005
+2. item 2, list 005
+   * sub-list, item 2, list 005
+   * sub-item 2, list 005
+   * 1) sub-sub-list, sub-item 3, list 005
+	 2) sub-sub-item 2, sub-item 3, list 005
+
+     3) sub-sub-item 3, sub-item 3, list 005
+   * sub-item 3 END, list 005
+3. item 3, list 005
+4. item 4, list 005
+5. item 5, list 005
+6. item 6, list 005 end

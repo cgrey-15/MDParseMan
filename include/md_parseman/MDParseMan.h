@@ -44,32 +44,59 @@ namespace md_parseman {
 struct MDPMNode {
 	enum class type_e : uint8_t {
 		Document,
-		Paragraph,
 		IndentedCode,
 		FencedCode,
 		Quote,
-		TextLiteral,
 		List,
 		ListItem,
+		Paragraph,
+		ThematicBreak,
 		SetextHeading,
 		ATXHeading,
+		TextLiteral,
+		HardLineBreak,
 		NULL_BLOCK
 	};
-	inline bool isLeaf() const {
+	inline bool isLeaf() const noexcept {
 		return (
 			flavor == type_e::IndentedCode or
 			flavor == type_e::FencedCode or
-			flavor == type_e::Paragraph);
+			flavor == type_e::Paragraph or
+			flavor == type_e::ThematicBreak);
 	}
+	inline bool isInline() const noexcept {
+		return (
+			flavor == type_e::TextLiteral or
+			flavor == type_e::HardLineBreak
+			);
+	}
+	inline bool isPrintableBlock() const noexcept {
+		return (
+			isInline() or
+			flavor == type_e::IndentedCode or
+			flavor == type_e::FencedCode
+			);
+	}
+	bool endsWithLastLineBlank() noexcept;
+
 	type_e flavor;
-	bool   isOpen;
+	bool isOpen;
+
+	struct LastLineRec {
+		friend struct MDPMNode;
+		bool blank = false;
+	private:
+		bool set = false;
+	};
+	LastLineRec lastLineStatus;
+
 	size_t posptr;
 	std::string_view body;
 
 	MDPMNode* parent;
 	std::list<MDPMNode> children;
 
-	std::variant<std::monostate, ListItemInfo, ListInfo, IndentedCode, Paragraph> crtrstc;
+	std::variant<std::monostate, ListItemInfo, ListInfo, IndentedCode, Paragraph, Heading, FencedCode> crtrstc;
 
 	class public_iterator;
 	class public_iterator {
@@ -80,15 +107,17 @@ struct MDPMNode {
 		using pointer_type = MDPMNode*;
 		using reference = MDPMNode&;
 
-		public_iterator(pointer_type ptr) : _retracting{ false }, _valPtr { ptr } {}
-		public_iterator() : _retracting{ false }, _valPtr{ nullptr } {}
+		public_iterator(pointer_type ptr) noexcept : _retracting{ false }, _valPtr { ptr } {}
+		public_iterator(const std::list<MDPMNode>::iterator& it) noexcept : _retracting{ false }, _valPtr{ it }/*, _parents{ {it} }*/{}
+		public_iterator() noexcept : _retracting{ false }, _valPtr{ nullptr } {}
 
-		reference operator*() { return std::holds_alternative<pointer_type>(_valPtr) ? *std::get<0>(_valPtr) : *std::get<1>(_valPtr); }
+		reference operator*() noexcept { return std::holds_alternative<pointer_type>(_valPtr) ? *std::get<0>(_valPtr) : *std::get<1>(_valPtr); }
 
-		pointer_type operator->() { return std::holds_alternative<pointer_type>(_valPtr) ? std::get<0>(_valPtr) : &*std::get<1>(_valPtr); }
+		pointer_type operator->() noexcept { return std::holds_alternative<pointer_type>(_valPtr) ? std::get<0>(_valPtr) : &*std::get<1>(_valPtr); }
 
-		MDPARSEMAN_EXPORT self_type& operator++();
-		MDPARSEMAN_EXPORT self_type operator++(int);
+		MDPARSEMAN_EXPORT self_type& operator++() noexcept;
+		MDPARSEMAN_EXPORT self_type operator++(int) noexcept;
+		MDPARSEMAN_EXPORT const pointer_type peekNext() const noexcept;
 
 		//MDPARSEMAN_EXPORT self_type& operator--();
 		//MDPARSEMAN_EXPORT self_type operator--(int);
@@ -96,11 +125,20 @@ struct MDPMNode {
 		bool operator==(const self_type& rhs) const { return this->_valPtr == rhs._valPtr and /*this->_root == rhs._root and*/ this->_parents == rhs._parents; }
 		bool operator!=(const self_type& rhs) const { return !operator==(rhs); }
 
+		bool isSameBlockTypeIfNextSibling() const noexcept;
+		struct BlockType {
+			bool isLeaf;
+			MDPMNode::type_e leafType;
+		};
+		BlockType nextBlockIsParagraph() const noexcept;
+
 	private:
+		using storage_it_t = std::list<MDPMNode>::iterator;
+		using const_storage_it_t = std::list<MDPMNode>::const_iterator;
+
 		bool _retracting;
-		std::variant<pointer_type, std::list<MDPMNode>::iterator> _valPtr{};
-		//pointer_type _root{};
-		std::vector<std::list<MDPMNode>::iterator> _parents;
+		std::variant<pointer_type, storage_it_t> _valPtr{};
+		std::vector<storage_it_t> _parents;
 	};
 
 };
@@ -138,31 +176,29 @@ namespace md_parseman {
 		Parser(const Parser&) = delete;
 		MDPARSEMAN_EXPORT Parser(Parser&& o) noexcept;
 
-		MDPARSEMAN_EXPORT Parser();
+		MDPARSEMAN_EXPORT Parser() noexcept;
 		MDPARSEMAN_EXPORT Parser(const char* begin, const char* end);
 		MDPARSEMAN_EXPORT virtual ~Parser();
 
 		MDPARSEMAN_EXPORT bool processLine(std::istream& in);
+		MDPARSEMAN_EXPORT bool processLine(const char* data, const size_t len) noexcept;
 		MDPARSEMAN_EXPORT bool processLine();
 
-		MDPARSEMAN_EXPORT MDPMNode::public_iterator begin();
-		MDPARSEMAN_EXPORT MDPMNode::public_iterator end();
+		MDPARSEMAN_EXPORT void finalizeDocument();
+
+		MDPARSEMAN_EXPORT MDPMNode::public_iterator begin() noexcept;
+		MDPARSEMAN_EXPORT MDPMNode::public_iterator end() noexcept;
 	private:
 		void resetParserForNewLine();
 
 		std::string  currLine_;
-		MDPMNode*        root_;
+		MDPMNode*    document_;
 		MDPMNode* latestBlock_;
 		impl::Context*    ctx_;
 
 		MDPMNode::public_iterator endIt_;
 	};
 	
-
-
-	MDPARSEMAN_EXPORT void processLine(md_parseman::impl::Context& contx, MDPMNode& node, std::istream& stream);
-	MDPARSEMAN_EXPORT void processLine(md_parseman::impl::Context& contx, MDPMNode& node, const std::string& line);
-
 	MDPARSEMAN_EXPORT auto mdToHtml(std::string str) -> std::string;
 	MDPARSEMAN_EXPORT auto mdToHtml(std::istream& in) -> std::string;
 	MDPARSEMAN_EXPORT bool htmlExport(Parser& p, std::ostream& out);

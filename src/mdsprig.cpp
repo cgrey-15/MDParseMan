@@ -22,7 +22,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include <cxxopts.hpp>
 #include <variant>
 #include <algorithm>
 #include <sstream>
@@ -34,17 +33,26 @@ SOFTWARE.
 #include <io.h>
 #endif
 
+#include <CLI/CLI.hpp>
 #include "md_parseman/MDParseMan.h"
 
-//using namespace std;
-std::vector<MDPMNode> testCases(std::istream& stm, bool& success, std::string& error, std::string& buffer);
-
-auto getTestCases(std::istream& strime, const std::string& section, bool useOther, int n) -> std::vector<std::string>;
 template<typename CharT, typename std::basic_string<CharT>::size_type BufLen=32>
 auto getMarkdown(std::basic_istream<CharT>& stm, bool makeSeparateLines)->std::variant<std::monostate, std::vector<std::basic_string<CharT>>, std::basic_string<CharT>>;
 template<typename CharT>
 auto getMarkdownLines(std::basic_istream<CharT>& stm)->std::vector<std::basic_string<CharT>>;
 
+namespace mdsprig {
+	enum class in_type : uint8_t {
+		File, String, StdCIn
+	};
+	struct CmdArgInfo {
+		in_type inSource;
+		bool toFile;
+		bool toPrependMd;
+	};
+}
+
+void parseArgs(const CLI::App& argProcessor, mdsprig::CmdArgInfo& res);
 
 #ifdef WIN32
 template <typename Facet>
@@ -55,170 +63,127 @@ struct deletable_facet : Facet {
 };
 #endif
 
-template<typename C>
-void processString(std::basic_string<C> str);
-template<typename C>
-auto getDelim(C c, C cn = static_cast<C>(0)) -> std::optional<DelimType>;
+void revitalizeViews(MDPMNode& node, const std::string& buffer);
+void configureParser(CLI::App& cmdArgParser, mdsprig::CmdArgInfo& argInfo, std::string& dst);
 
+std::string correctUserFilename(const std::string& rawStr, const bool useOutExtension=false) noexcept;
 
 int main(int argc, char* argv[])
 {
-	cxxopts::Options options("MDParseMan", "Markdown parsing library and testing");
-	options.add_options()
-		("s, test-string", "Use a string argument---surrounded in qotation---as input for parser. Other options will be ignored if supplied.", cxxopts::value<std::string>())
-		("f, markdown-file", "Open a markdown-format text file for testing. If no file or string arguments are given, user input will be used.", cxxopts::value<std::string>()->default_value(""))
-		("separate-lines", "Split text lines into a collection of separate strings. Ignored if no file is given", cxxopts::value<bool>()->default_value("false"))
-		;
+	std::string multPurposeStr;
 
-	auto argValues = options.parse(argc, argv);
+	mdsprig::CmdArgInfo cmdArgResult{};
+
+	CLI::App argProcessor{ "A basic markdown-to-html converter. Currently incomplete. HTML scrubbing is not supported.", "msdprig" };
+
+	configureParser(argProcessor, cmdArgResult, multPurposeStr);
+
+	CLI11_PARSE(argProcessor, argc, argv);
+
+	parseArgs(argProcessor, cmdArgResult);
 
 	std::ifstream streamie{};
-	std::vector<MDPMNode> what;
 
-	bool isOtherFile{};
-	std::string markdownInput;
+	md_parseman::Parser parsey{};
 
-	if (!argValues["markdown-file"].as<std::string>().empty()) {
-		std::ifstream stormie{};
+	if (cmdArgResult.inSource == mdsprig::in_type::File){
 		if (streamie.is_open()) {
 			streamie.close();
 		}
-		streamie.open(argValues["markdown-file"].as<std::string>());
-		if (!streamie) {
-			return 1;
+		std::vector<std::string> extraArgs = argProcessor.remaining();
+
+		int failTally = 0;
+		bool singleFile = extraArgs.size() == 1;
+
+		std::string outputName;
+		std::optional<std::ofstream> outFileOptional;
+		if (cmdArgResult.toFile) {
+			outputName = multPurposeStr;
+			outFileOptional.emplace(outputName);
 		}
-		if (!argValues["separate-lines"].as<bool>()) {
-			markdownInput = std::get<std::string>(getMarkdown(streamie, false));
+		for (const auto& inFilename : extraArgs) {
+			md_parseman::Parser parsey{};
+			streamie.open(inFilename);
+			if (!streamie) {
+				std::cerr << "file not found; skipping " << inFilename << "\n";
+				++failTally;
+				continue;
+			}
+			if(!cmdArgResult.toFile) {
+				if (cmdArgResult.toPrependMd) {
+					outputName = correctUserFilename(inFilename, true);
+					outFileOptional.emplace(outputName);
+				}
+				else {
+					outputName = correctUserFilename(inFilename, false);
+				}
+			}
+
+			std::ofstream result{};
+			if (cmdArgResult.toPrependMd) {
+				*outFileOptional << inFilename << ":\n";
+				for (std::string inFileBuffer; streamie; std::getline(streamie, inFileBuffer)) {
+					*outFileOptional << inFileBuffer << "\n";
+					inFileBuffer.push_back('\n');
+					parsey.processLine(inFileBuffer.data(), inFileBuffer.size());
+				}
+				*outFileOptional << "\n";
+			}
+			else {
+				bool success{ true };
+				while (success) {
+					success = parsey.processLine(streamie);
+				}
+				if (!cmdArgResult.toFile) {
+					outFileOptional.emplace(outputName);
+				}
+			}
+#if 1
+			if (!singleFile and !cmdArgResult.toPrependMd) {
+				*outFileOptional << inFilename << ":\n";
+			}
+#endif
+			if (!md_parseman::htmlExport(parsey, *outFileOptional)) {
+				return 1;
+			}
+			if (!cmdArgResult.toFile) {
+				outFileOptional.reset();
+			}
 			streamie.close();
 		}
 	}
+	else if (cmdArgResult.inSource == mdsprig::in_type::StdCIn) {
+		std::optional<std::ofstream> maybeFile;
+		std::string maybeOutFilename;
 
-	md_parseman::Parser parsey{};
-	MDPMNode node{};
+		std::ostream* outStream = &std::cout;
 
-	// hello commenti
+		if (cmdArgResult.toFile and cmdArgResult.toPrependMd) {
+			maybeFile.emplace(multPurposeStr);//maybeOutFilename);
+			outStream = &*maybeFile;
 
-	if (argValues["test-string"].count() != 0) {
-		markdownInput = argValues["test-string"].as<std::string>();
-		md_parseman::Parser parsi{ markdownInput.c_str(), markdownInput.c_str() + markdownInput.size() };
-		bool success = true;
-		while (success) {
-			success = parsi.processLine();
-		}
-	}
-	else if (!argValues["markdown-file"].as<std::string>().empty() and argValues["separate-lines"].as<bool>()) {
-		bool success{ true };
-		while (success) {
-			success = parsey.processLine(streamie);
-		}
-#if 0
-		for (const auto& element : mdStrings) {
-			auto& statey = what.back();
-			md_parseman::processLine(something, what.back(), element);
-		}
-#endif
-	}
-	else if (!argValues["markdown-file"].as<std::string>().empty()) {
-		md_parseman::Parser parsi{ markdownInput.c_str(), markdownInput.c_str() + markdownInput.size() };
-		bool success = true;
-		while (success) {
-			success =  parsi.processLine();
-		}
-		bool res = md_parseman::htmlExport(parsi, std::cout);
-		constexpr auto sizezi = sizeof(MDPMNode::public_iterator);
-		//for (auto it : parsi ) { //= parsi.begin(), end = parsi.end(); it != end; ++it) {
-			//processBlock(it, docStack);
-			//const auto& el = *it;
-			//int i = 0;
-		//}
-	}
-	else {
-		bool success = true;
-		while (success) {
-			success = parsey.processLine(std::cin);
-		}
-	}
-#if 0
-	else if (bool useFile; (useFile = argValues["test-string"].count() != 0) or (argValues["markdown-file"].count() != 0 and !argValues["separate-lines"].as<bool>())) {
-		std::string markdownInput;
-		if (useFile) {
-		}
-	}
-#endif
-	return 0;
-}
-
-std::vector<std::string> getTestCases(std::istream& strime, const std::string& section, bool useOther, int n)
-{
-	std::vector<std::string> result{};
-	if (!useOther) {
-		//nlohmann::json jc;
-		//strime >> jc;
-		//auto pos = std::find_if(jc.begin(), jc.end(), [&section](const nlohmann::json& v) {return v["section"] == section; });
-		//while ((*pos)["section"] == section && (n > 0)) {
-		//	result.push_back((*pos)["markdown"]);
-		//	++pos;
-		//	--n;
-		//}
-	}
-	else {
-		for (std::string line{}; std::getline(strime, line);) {
-			result.emplace_back(line);
-		}
-	}
-	return result;
-}
-
-template <typename C>
-void processString(std::basic_string<C> str) {
-	using character_t = C;
-	std::basic_istringstream<C> stream{ str };
-	std::list<text_info<character_t>> delimStack{};
-
-	for (character_t sym; stream.get(sym); ) {
-		std::optional<DelimType> result;
-		if (sym == static_cast<character_t>('!')) {
-			character_t sym2;
-			if (not stream.get(sym2)) {
-				break;
+			for (std::string inFileBuffer; std::cin; std::getline(std::cin, inFileBuffer) ) {
+				*outStream << inFileBuffer << "\n";
+				parsey.processLine(inFileBuffer.data(), inFileBuffer.size());
 			}
-			if (not (result = getDelim(sym, sym2))) {
-				return;
-			}
-			else {
-				std::basic_string<character_t> literals{};
-				literals.push_back(sym);
-				literals.push_back(sym2);
-				delimStack.push_back({ DelimType::ExclamBracket, 1, true, CloserType::PotOpener, literals });
-			}
-		}
-		else if (!(result = getDelim(sym))) {
-			return;
+			*outStream << "\n";
 		}
 		else {
-			std::basic_string<character_t> literals{};
+			bool success = true;
+			while (success) {
+				success = parsey.processLine(std::cin);
+			}
+			if (cmdArgResult.toFile) {
+				maybeOutFilename = correctUserFilename(multPurposeStr);
+				maybeFile.emplace(maybeOutFilename);
+				outStream = &*maybeFile;
+			}
 		}
+		parsey.finalizeDocument();
+		bool res = md_parseman::htmlExport(parsey, *outStream);
 	}
+	return 0;
 }
-
-#if 1
-template<typename C>
-std::optional<DelimType> getDelim(C c, C cn ) {
-	switch (c) {
-	case '[': return DelimType::SBracket;
-		break;
-	case '!': if (cn == static_cast<C>('[')) return DelimType::ExclamBracket;
-		break;
-	case '*': return DelimType::Star;
-		break;
-	case '_': return DelimType::Underline;
-		break;
-	default: return {};
-		   break;
-	}
-	return {};
-}
-#endif
 
 template<typename CharT, typename std::basic_string<CharT>::size_type BufLen>
 auto getMarkdown(std::basic_istream<CharT>& stm, bool makeSeparateLines)->std::variant < std::monostate, std::vector<std::basic_string<CharT>>, std::basic_string<CharT>> {
@@ -252,4 +217,57 @@ auto getMarkdownLines(std::basic_istream<CharT>& stm) -> std::vector<std::basic_
 	return outputLines;
 }
 
+void revitalizeViews(MDPMNode& root, const std::string& buffer) {
+	if (!root.body.empty()) {
+		root.body = std::string_view(&buffer[root.posptr], root.body.size());
+	}
 
+	for (auto& child : root.children) {
+		child.parent = &root;
+		revitalizeViews(child, buffer);
+	}
+}
+
+void parseArgs(const CLI::App& argProcessor, mdsprig::CmdArgInfo& res) {
+	const auto options = argProcessor.get_options();
+
+	std::vector<std::vector<std::string>> pop{};
+
+	if (argProcessor.remaining_size() != 0) {
+		res.inSource = mdsprig::in_type::File;
+	}
+	else {
+		res.inSource = mdsprig::in_type::StdCIn;
+	}
+
+	if (!options[1]->empty()) {
+		res.toFile = true;
+		if (!options[2]->empty()) {
+			res.toPrependMd = true;
+		}
+	}
+}
+
+void configureParser(CLI::App& cmdArgParser, mdsprig::CmdArgInfo& argInfo, std::string& outFilename) {
+	cmdArgParser.allow_extras();
+	//cmdArgParser.add_option("-f, --markdown-file", outFilename, "Parse a markdown document file.");
+	auto oOpt = cmdArgParser.add_option("-o, --output", outFilename, "Output file as this filename");
+	cmdArgParser.add_flag("-p, --prepend-original", argInfo.toPrependMd, "Output both markdown and html into a file; -o required");// ->needs(oOpt);
+}
+
+std::string correctUserFilename(const std::string& rawStr, const bool useOutExtension) noexcept {
+	size_t pos = std::min(rawStr.rfind('.'), rawStr.size());
+	std::string correctedStr{ rawStr, 0, pos };
+	if (!useOutExtension) {
+		if (rawStr.compare(pos, 5, ".html") != 0) {
+			correctedStr.append(".html");
+		}
+		else {
+			correctedStr.append("COPY.html");
+		}
+	}
+	else {
+		correctedStr.append(".out");
+	}
+	return correctedStr;
+}

@@ -1,0 +1,3 @@
+- Valid thematic break (002)
+     ***
+- End.

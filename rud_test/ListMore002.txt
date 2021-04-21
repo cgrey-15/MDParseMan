@@ -1,0 +1,8 @@
+- list 002
+- item 2, list 002
+- item 3, list 002
+  1. sub-list 002
+
+     second paragraph, sub-list 002
+  2. end sub-list 002
+- list 002 end

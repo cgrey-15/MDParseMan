@@ -1,0 +1,9 @@
+> More: not setext heading (000)
+===
+
+> More: again not setext heading (000)
+again, but line 2
+===
+
+- More: again once more, not setext heading (000)
+---
