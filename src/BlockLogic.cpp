@@ -244,6 +244,9 @@ char findSetextHeading(md::impl::Context& ctx, const IndentInformation& preinden
 //void matchThematic(md::impl::Context& contx, MDPMNode& node, const char* line);
 auto findCode(md::impl::Context & ctx, MDPMNode& node, mdpm_impl::BlobParsingState& currSitu) noexcept ->std::optional<IndentedCode>;
 bool matchCode(md::impl::Context & ctx, MDPMNode& node, mdpm_impl::BlobParsingState& currSitu) noexcept;
+bool matchFencedCode(md::impl::Context& ctx, MDPMNode& node, mdpm_impl::BlobParsingState& currSitu) noexcept;
+auto findCode2(md::impl::Context& ctx, MDPMNode& node, IndentInformation preIndent) noexcept ->FencedCode;
+auto findCodeCloser2(md::impl::Context& ctx, MDPMNode& node, const IndentInformation preIndent) noexcept ->FencedCode;
 auto findListItem(md::impl::Context& ctx, MDPMNode& node, mdpm_impl::BlobParsingState& currSitu, IndentInformation& preIndent) noexcept 
 -> std::optional<std::pair<ListInfo, ListItemInfo>>;
 
@@ -256,9 +259,9 @@ bool matchParagraphLine(md::impl::Context & ctx, MDPMNode& node, const /*std::st
 MDPMNode& resolveAncestorUntilContainer(MDPMNode& parent, MDPMNode::type_e childTypeTag, md_parseman::impl::Context& ctx) noexcept;
 
 MDPMNode* _processNodeMatchExistingImpl(MDPMNode& node, md_parseman::impl::Context& cotx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state) noexcept;
-MDPMNode* processNodeMatchAnyNew(MDPMNode& node, md_parseman::impl::Context& ctx, mdpm_impl::BlobParsingState& state) noexcept;
+MDPMNode* processNodeMatchAnyNew(MDPMNode& node, md_parseman::impl::Context& ctx, mdpm_impl::BlobParsingState& state, bool maybeLazy) noexcept;
 MDPMNode* processNodeMatchExisting(MDPMNode& node, md_parseman::impl::Context& ctx, const char * line, mdpm_impl::BlobParsingState& state) noexcept;
-void _injectText(md_parseman::impl::Context& ctx, MDPMNode& node, const char* str, size_t len, size_t strpos, bool keepLeadingWhitespaces = true) noexcept;
+void _injectText(md_parseman::impl::Context& ctx, MDPMNode& node, md_parseman::UInt excessIndent, /*const char* str, size_t len, size_t strpos, */bool isFencedCodeInfo = false) noexcept;
 
 MDPMNode* processNodeMatchExisting(MDPMNode& node, md_parseman::impl::Context& ctx, const char * line, mdpm_impl::BlobParsingState& state) noexcept {
 	return _processNodeMatchExistingImpl(node, ctx, line, state);
@@ -311,33 +314,38 @@ ctx_{ new impl::Context{{}, document_, 0, 0, {std::nullopt}, false} }
 }
 md::Parser::~Parser() { delete document_->parent; /*delete document_; */delete ctx_; }
 
-bool _processSingle(MDPMNode& n, mdpm0_impl::Context& cotx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state) noexcept;
+bool _processSingle(MDPMNode& n, mdpm0_impl::Context& ctx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state) noexcept;
 MDPMNode* _processNodeMatchExistingImpl(MDPMNode& node, mdpm0_impl::Context& cotx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state) noexcept {
 	bool matched{};
-	if ( (matched = _processSingle(node, cotx, line, state)) && !node.children.empty() && node.children.back().isOpen ){//node.children.back().matching) {
+	if ( (matched = _processSingle(node, cotx, line, state)) and !node.children.empty() and node.children.back().isOpen ){//node.children.back().matching) {
 		return _processNodeMatchExistingImpl(node.children.back(), cotx, line, state);
 	}
 	if (matched) {
 		return &node;
 	}
+	else if (not matched and node.flavor == MDPMNode::type_e::FencedCode and not node.isOpen) {
+		return nullptr;
+	}
 	return node.parent;
 }
-bool _processSingle(MDPMNode& n, mdpm0_impl::Context& cotx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state) noexcept {
+bool _processSingle(MDPMNode& n, mdpm0_impl::Context& ctx, const /*std::string&*/char* line, mdpm_impl::BlobParsingState& state) noexcept {
 	bool matching{};
 	switch (n.flavor) {
 	case MDPMNode::type_e::Document: matching = true;//do nothing?
 		break;
-	case MDPMNode::type_e::IndentedCode: matching = matchCode(cotx, n, state);
+	case MDPMNode::type_e::IndentedCode: matching = matchCode(ctx, n, state);
 		break;
-	case MDPMNode::type_e::Paragraph: matching = matchParagraphLine(cotx, n, line, state);
+	case MDPMNode::type_e::FencedCode: matching = matchFencedCode(ctx, n, state);
 		break;
-	case MDPMNode::type_e::Quote: matching = findBlockQuote(cotx, n, state, true);
+	case MDPMNode::type_e::Paragraph: matching = matchParagraphLine(ctx, n, line, state);
+		break;
+	case MDPMNode::type_e::Quote: matching = findBlockQuote(ctx, n, state, true);
 		break;
 	case MDPMNode::type_e::List: matching = true;//matchList(ctx, n, line/*.c_str()*/, state);
 		break;
 	case MDPMNode::type_e::ATXHeading: matching = false;
 		break;
-	case MDPMNode::type_e::ListItem: matching = matchListItem(cotx, n, state);
+	case MDPMNode::type_e::ListItem: matching = matchListItem(ctx, n, state);
 		break;
 	default:
 		break;
@@ -402,6 +410,55 @@ bool matchCode(mdpm0_impl::Context & ctx, MDPMNode& node, mdpm_impl::BlobParsing
 	return matching;
 }
 
+bool matchFencedCode(mdpm0_impl::Context& ctx, MDPMNode& node, mdpm_impl::BlobParsingState& currSitu ) noexcept {
+	IndentInformation ind = mdpm_impl::countWhitespaces1(*ctx.inp_, std::get<FencedCode>(node.crtrstc).indent, currSitu.linePos, currSitu.indentDeficit);
+	//auto prevState = ctx.inp_->mark<TAO_PEGTL_NAMESPACE::rewind_mode::required>();
+	ctx.inp_->bump(ind.whitespaces);
+
+	// TODO: refactor this function to accommodate tabs
+	//assert(ind.excessIndentation == 0);
+	currSitu.indentDeficit += ind.excessIndentation;
+
+	bool match = true;
+
+	if (ind.indentSpaces < 4 and ind.isNonblank) {
+		auto prevState = ctx.inp_->mark<TAO_PEGTL_NAMESPACE::rewind_mode::required>();
+		FencedCode f = findCodeCloser2(ctx, node, ind);
+		if (f.type == std::get<FencedCode>(node.crtrstc).type and f.length >= std::get<FencedCode>(node.crtrstc).length) {
+			match = not prevState(true); // false; discard prevState
+			ctx.freshestBlock = resolveNode(&node, ctx.textBuffer, false);
+		}
+		/*else if (f.type != std::get<FencedCode>(node.crtrstc).type or f.length >= mdpm_impl::MIN_FENCE_SIZE) {
+			match = not prevState(false); // true; reel input back to prevState
+		}*/
+		else {
+			match = not prevState(false); // true; reel input back to prevState
+		}
+	}
+
+	//return prevState(match);
+	return match;
+}
+
+auto findCode2(mdpm0_impl::Context& ctx, MDPMNode& node, const IndentInformation preIndent) noexcept ->FencedCode {
+	FencedCode res;
+
+	auto prevState = ctx.inp_->mark<TAO_PEGTL_NAMESPACE::rewind_mode::required>();
+	ctx.inp_->bump(preIndent.whitespaces);
+	prevState((res = mdpm_impl::tryFencedCodeOpener(*ctx.inp_)).length);
+
+	return res;
+}
+auto findCodeCloser2(mdpm0_impl::Context& ctx, MDPMNode& node, const IndentInformation preIndent) noexcept ->FencedCode {
+	FencedCode res;
+
+	auto prevState = ctx.inp_->mark<TAO_PEGTL_NAMESPACE::rewind_mode::required>();
+	ctx.inp_->bump(preIndent.whitespaces);
+	prevState((res = mdpm_impl::tryFencedCodeCloser(*ctx.inp_)).length);
+
+	return res;
+}
+
 // If matching, use node's parent and add a new sibling node and close this node.
 auto findListItem(mdpm0_impl::Context& ctx, MDPMNode& node, mdpm_impl::BlobParsingState& currSitu, IndentInformation& preIndent) noexcept -> std::optional<std::pair<ListInfo, ListItemInfo>>
 {
@@ -411,8 +468,9 @@ auto findListItem(mdpm0_impl::Context& ctx, MDPMNode& node, mdpm_impl::BlobParsi
 	auto saveState = ctx.inp_->mark<TAO_PEGTL_NAMESPACE::rewind_mode::required>();
 	ctx.inp_->bump(preIndent.whitespaces);
 
+	int outstandingDeficit = std::max(static_cast<int>(currSitu.indentDeficit) - preIndent.indentSpaces, 0);
 
-	if (auto attempt = mdpm_impl::tryListItem0(*ctx.inp_, currSitu.linePos, currSitu.indentDeficit)) {
+	if (auto attempt = mdpm_impl::tryListItem0(*ctx.inp_, currSitu.linePos + preIndent.indentSpaces, /*currSitu.indentDeficit*/outstandingDeficit)) {
 		if (node.flavor == MDPMNode::type_e::Paragraph and
 			((std::get<ListInfo>(*attempt).orderedStartLen > 1 or (std::get<ListInfo>(*attempt).orderedStartLen == 1 and std::get<ListInfo>(*attempt).orderedStart0[0] != '1')) or
 			not std::get<3>(*attempt) /*blank line*/ ) ) {
@@ -430,7 +488,7 @@ auto findListItem(mdpm0_impl::Context& ctx, MDPMNode& node, mdpm_impl::BlobParsi
 
 		ctx.inp_->bump(spacingInfo.charTCost);
 
-		currSitu.linePos += spacingInfo.indentConsumptionCost;
+		currSitu.linePos += preIndent.whitespaces + spacingInfo.indentConsumptionCost + spacingInfo.excessTabPadding;
 		currSitu.indentDeficit = spacingInfo.excessTabPadding;
 
 		return { { std::move(lInfo), std::move(itemInfo) } };
@@ -524,7 +582,7 @@ MDPMNode& resolveAncestorUntilContainer(MDPMNode& parent, const MDPMNode::type_e
 // pre: 'node' is a matched node, but its last child is not matched (and presumably all ancestors of that child)
 
 bool _sameListType(ListInfo& a, ListInfo& b) noexcept;
-MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm0_impl::Context& ctx, mdpm_impl::BlobParsingState& state) noexcept {
+MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm0_impl::Context& ctx, mdpm_impl::BlobParsingState& state, bool maybeLazy) noexcept {
 	if (node.flavor == MDPMNode::type_e::IndentedCode || node.flavor == MDPMNode::type_e::FencedCode || node.flavor == MDPMNode::type_e::ATXHeading
 		|| node.flavor == MDPMNode::type_e::SetextHeading) {//|| node.flavor == MDPMNode::type_e::Paragraph) {
 		return &node;
@@ -539,12 +597,17 @@ MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm0_impl::Context& ctx, mdpm_
 	if (Heading h; not fullyIndented and (h = findATXHeading(ctx, node, state, preIndent)).lvl) {
 		newborn = &node.children.emplace_back(MDPMNode{ MDPMNode::type_e::ATXHeading, true, {}, ctx.textBuffer.size(), {}, &node, {}, h });
 	}
-	else if (std::optional<IndentedCode> indCodeInfo; ctx.freshestBlock->flavor != MDPMNode::type_e::Paragraph and (indCodeInfo = findCode(ctx, node, state))) {
+	else if (std::optional<IndentedCode> indCodeInfo; not maybeLazy and (indCodeInfo = findCode(ctx, node, state))) {
 		auto& correctAncestorBlock = resolveAncestorUntilContainer(node, MDPMNode::type_e::IndentedCode, ctx);
 
 		assert(!correctAncestorBlock.isLeaf());
 		newborn = &correctAncestorBlock.children.emplace_back(MDPMNode{ MDPMNode::type_e::IndentedCode, true, {}, ctx.textBuffer.size(), std::string_view{}, &correctAncestorBlock, std::list<MDPMNode>{
-			}, *indCodeInfo/*{IndentedCode{static_cast<size_t>(-1)}}*/ });
+			}, *indCodeInfo });
+	}
+	else if (FencedCode f; not fullyIndented and (f = findCode2(ctx, node, preIndent)).length) {
+		f.indent = preIndent.indentSpaces;
+		auto& correctAncestorBlock = resolveAncestorUntilContainer(node, MDPMNode::type_e::FencedCode, ctx);
+		newborn = &correctAncestorBlock.children.emplace_back(MDPMNode{ MDPMNode::type_e::FencedCode, true, {}, ctx.textBuffer.size(), std::string_view{}, &correctAncestorBlock, std::list<MDPMNode>{}, f });
 	}
 	else if (findBlockQuote(ctx, node, state)) {
 
@@ -553,7 +616,7 @@ MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm0_impl::Context& ctx, mdpm_
 		assert(!correctAncestorBlock.isLeaf());
 		correctAncestorBlock.children.emplace_back(MDPMNode{ MDPMNode::type_e::Quote,true, {}, 0, {}, &correctAncestorBlock, {}, {} });
 
-		newborn = processNodeMatchAnyNew(correctAncestorBlock.children.back(), ctx, state);
+		newborn = processNodeMatchAnyNew(correctAncestorBlock.children.back(), ctx, state, false);
 	}
 	else if (char lvl; not fullyIndented and node.flavor == MDPMNode::type_e::Paragraph and (lvl = findSetextHeading(ctx, preIndent))) {
 		bool hasContent = true;
@@ -580,19 +643,19 @@ MDPMNode* processNodeMatchAnyNew(MDPMNode& node, mdpm0_impl::Context& ctx, mdpm_
 			//assert(!node.isLeaf());
 			correctAncestorBlock.children.push_back({ MDPMNode::type_e::List, true, {}, 0, {}, &correctAncestorBlock, {}, std::move(listTag) });
 			correctAncestorBlock.children.back().children.push_back({ MDPMNode::type_e::ListItem, true, {}, 0, {}, &correctAncestorBlock.children.back(), {}, std::move(listItemTag) });
-			newborn = processNodeMatchAnyNew(correctAncestorBlock.children.back().children.back(), ctx, state);
+			newborn = processNodeMatchAnyNew(correctAncestorBlock.children.back().children.back(), ctx, state, false);
 		}
 		else if (!_sameListType(std::get<ListInfo>(node.crtrstc), listTag)) {
 			assert(!node.parent->isLeaf());
 			auto& correctAncestorBlock = resolveAncestorUntilContainer(node, MDPMNode::type_e::List, ctx);
 			correctAncestorBlock.children.push_back({ MDPMNode::type_e::List, true, {}, 0, {}, &correctAncestorBlock, {}, std::move(listTag) });
 			correctAncestorBlock.children.back().children.push_back({ MDPMNode::type_e::ListItem, true, {}, 0, {}, &correctAncestorBlock.children.back(), {}, std::move(listItemTag) });
-			newborn = processNodeMatchAnyNew(correctAncestorBlock.children.back().children.back(), ctx, state);
+			newborn = processNodeMatchAnyNew(correctAncestorBlock.children.back().children.back(), ctx, state, false);
 		}
 		else {
 			assert(!node.isLeaf());
 			node.children.push_back({ MDPMNode::type_e::ListItem, true, {}, 0, {}, &node, {}, std::move(listItemTag) });
-			newborn = processNodeMatchAnyNew(node.children.back(), ctx, state);
+			newborn = processNodeMatchAnyNew(node.children.back(), ctx, state, false);
 		}
 	}
 	else {
@@ -609,19 +672,29 @@ bool _sameListType(ListInfo& a, ListInfo& b) noexcept {
 	return a.symbolUsed == b.symbolUsed;
 }
 
-void _injectText(mdpm0_impl::Context& ctx, MDPMNode& node, const char* str, size_t len, size_t strpos, const bool keepLeadingWhitespaces) noexcept {
+void _injectText(mdpm0_impl::Context& ctx, MDPMNode& node, const md_parseman::UInt excessIndent, /*const char* str, size_t len, size_t strpos, */const bool isFencedCodeInfo) noexcept {
 	auto chunk = mdpm_impl::getTextData(*ctx.inp_, node.flavor == MDPMNode::type_e::Paragraph);
 
 	if (uint8_t nSpaces; node.flavor == MDPMNode::type_e::IndentedCode and (nSpaces = std::get<IndentedCode>(node.crtrstc).spacePrefixes)) {
 		static const char spaces[] = "   ";
 		ctx.textBuffer.insert(ctx.textBuffer.end(), spaces, spaces + nSpaces);
 	}
+	if (excessIndent > 0 and node.flavor == MDPMNode::type_e::FencedCode) {
+		static const char spaces[] = "   ";
+		ctx.textBuffer.insert(ctx.textBuffer.end(), spaces, spaces + excessIndent);
+	}
 
 	ctx.textBuffer.insert(ctx.textBuffer.end(), chunk.first, chunk.first + chunk.second);
 	if (/*appendNewline && false*/node.flavor==MDPMNode::type_e::Paragraph) {
 		//ctx.textBuffer.push_back('\n');
 	}
-	node.body = { ctx.textBuffer.data() + node.posptr, ctx.textBuffer.size() - node.posptr };
+	if (not isFencedCodeInfo) {
+		node.body = { ctx.textBuffer.data() + node.posptr, ctx.textBuffer.size() - node.posptr };
+	}
+	else {
+		assert(node.flavor == MDPMNode::type_e::FencedCode);
+		std::get<FencedCode>(node.crtrstc).infoStr = { ctx.textBuffer.data() + node.posptr, ctx.textBuffer.size() - node.posptr };
+	}
 }
 
 void _trimParagraph(MDPMNode& n) noexcept;
@@ -693,9 +766,9 @@ void resolveDematchedChainLinksExtractText(mdpm0_impl::Context& ctx,
 	                                         const std::string_view s) noexcept
 {
 	size_t firstNonWhitespace = mdpm_impl::checkNonBlank(*ctx.inp_);
-	bool isNonBlank = firstNonWhitespace != md_parseman::NPOS;
+	bool isNonBlankLine = firstNonWhitespace != md_parseman::NPOS;
 
-	if (not boilingChainLinkTail->children.empty() and !isNonBlank) {
+	if (not boilingChainLinkTail->children.empty() and !isNonBlankLine) {
 		boilingChainLinkTail->children.back().lastLineStatus.blank = true;
 	}
 
@@ -705,7 +778,7 @@ void resolveDematchedChainLinksExtractText(mdpm0_impl::Context& ctx,
 	* - we're not blockquote nor prefixed with corresponding marker
 	* - a list item that's starting with a blank line
 	*/
-	if (!isNonBlank and 
+	if (!isNonBlankLine and 
 		boilingChainLinkTail->flavor != MDPMNode::type_e::ATXHeading and
 		boilingChainLinkTail->flavor != MDPMNode::type_e::SetextHeading and
 		boilingChainLinkTail->flavor != MDPMNode::type_e::ThematicBreak and
@@ -724,38 +797,51 @@ void resolveDematchedChainLinksExtractText(mdpm0_impl::Context& ctx,
 	if (ctx.freshestBlock != matchedChainLinkTail &&
 		matchedChainLinkTail == boilingChainLinkTail /* empty boiling chain link */ &&
 		ctx.freshestBlock->flavor == MDPMNode::type_e::Paragraph &&
-		isNonBlank)
+		isNonBlankLine)
 	{ 
 		//mdpm_impl::tryNonBlank(*ctx.inp_);
 		ctx.inp_->bump(firstNonWhitespace);
-		_injectText(ctx, *ctx.freshestBlock, s.data(), s.size(), state.linePos, true); // This line is a lazy-continuation line; add text-only portion of line and move on
+		_injectText(ctx, *ctx.freshestBlock, state.indentDeficit);// , true); // This line is a lazy-continuation line; add text-only portion of line and move on
 	}
 	else {
 		while (ctx.freshestBlock != matchedChainLinkTail) {
-			ctx.freshestBlock = resolveNode(ctx.freshestBlock, ctx.textBuffer, isNonBlank);
+			ctx.freshestBlock = resolveNode(ctx.freshestBlock, ctx.textBuffer, isNonBlankLine);
 		}
 		if (boilingChainLinkTail->flavor == MDPMNode::type_e::IndentedCode) {
-			_injectText(ctx, *boilingChainLinkTail, s.data(), s.size(), state.linePos);
+			_injectText(ctx, *boilingChainLinkTail, state.indentDeficit);
 		}
-		else if (boilingChainLinkTail->flavor == MDPMNode::type_e::Paragraph and isNonBlank) {
+		else if (boilingChainLinkTail->flavor == MDPMNode::type_e::FencedCode) {
+			if (boilingChainLinkTail == matchedChainLinkTail) {
+				_injectText(ctx, *boilingChainLinkTail, state.indentDeficit);
+			}
+			else if (isNonBlankLine) {
+				_injectText(ctx, *boilingChainLinkTail, state.indentDeficit, true);
+				boilingChainLinkTail->posptr = ctx.textBuffer.size();
+			}
+			else {
+				mdpm_impl::getTextData(*ctx.inp_, false);
+			}
+		}
+		else if (boilingChainLinkTail->flavor == MDPMNode::type_e::Paragraph and isNonBlankLine) {
 			auto indentSize = firstNonWhitespace;
 			//ctx.inp_->bump(firstNonWhitespace);
-			_injectText(ctx, *boilingChainLinkTail, s.data(), s.size(), /*state.pos*/indentSize);
+			_injectText(ctx, *boilingChainLinkTail, state.indentDeficit);
 		}
-		else if (boilingChainLinkTail->flavor == MDPMNode::type_e::ATXHeading and isNonBlank) {
+		else if (boilingChainLinkTail->flavor == MDPMNode::type_e::ATXHeading and isNonBlankLine) {
 			assert(state.bound <= s.size());
-			_injectText(ctx, *boilingChainLinkTail, s.data(), state.bound, state.linePos);
+			_injectText(ctx, *boilingChainLinkTail, state.indentDeficit);
 		}
-		else if (!isNonBlank) {
+		else if (!isNonBlankLine) {
 			//nothing
 			//mdpm_impl::consumeResidualWsNl(*ctx.inp_);
-			ctx.inp_->bump_to_next_line();
+			mdpm_impl::getTextData(*ctx.inp_, false);
+			//ctx.inp_->bump_to_next_line();
 		}
 		else {
 			auto& correctAncestorBlock = resolveAncestorUntilContainer(*boilingChainLinkTail, MDPMNode::type_e::Paragraph, ctx);
 			newborn = &correctAncestorBlock.children.emplace_back(MDPMNode{ MDPMNode::type_e::Paragraph, true, {}, ctx.textBuffer.size(), {}, &correctAncestorBlock, {}, Paragraph{false} });
 			ctx.inp_->bump(firstNonWhitespace);
-			_injectText(ctx, *newborn, s.data(), s.size(), firstNonWhitespace, false);
+			_injectText(ctx, *newborn, state.indentDeficit, false);
 			boilingChainLinkTail = newborn;
 		}
 
@@ -776,7 +862,7 @@ bool md::Parser::processLine(const char* data, const size_t len) noexcept {
 	ctx_->inp_.emplace(data, len, "data");
 	mdpm_impl::BlobParsingState lineState{};
 	auto* matchChainLinkTail = processNodeMatchExisting(*document_, *ctx_, data, lineState);
-	MDPMNode* newborn = processNodeMatchAnyNew(*matchChainLinkTail, *ctx_, lineState);
+	MDPMNode* newborn = processNodeMatchAnyNew(*matchChainLinkTail, *ctx_, lineState, ctx_->freshestBlock->flavor == MDPMNode::type_e::Paragraph);
 
 	resolveDematchedChainLinksExtractText(*ctx_, matchChainLinkTail, newborn, lineState, data);
 	latestBlock_ = ctx_->freshestBlock;
@@ -788,9 +874,14 @@ bool md::Parser::processLine() {
 	mdpm_impl::BlobParsingState lineState{};
 	auto* matchChainLinkTail = processNodeMatchExisting(*document_, *ctx_, nullptr, lineState);
 	std::string_view str{ "null" };
-	MDPMNode* newbornContainer = processNodeMatchAnyNew(*matchChainLinkTail, *ctx_, lineState);
-
-	resolveDematchedChainLinksExtractText(*ctx_, matchChainLinkTail, newbornContainer, lineState, str);
+	if (matchChainLinkTail != nullptr) {
+		MDPMNode* newbornContainer = processNodeMatchAnyNew(*matchChainLinkTail, *ctx_, lineState, ctx_->freshestBlock->flavor == MDPMNode::type_e::Paragraph);
+		resolveDematchedChainLinksExtractText(*ctx_, matchChainLinkTail, newbornContainer, lineState, str);
+	}
+	else {
+		assert(ctx_->freshestBlock->children.back().flavor == MDPMNode::type_e::FencedCode and not ctx_->freshestBlock->children.back().isOpen);
+		//ctx_->inp_->bump_to_next_line();
+	}
 	latestBlock_ = ctx_->freshestBlock;
 	return !ctx_->inp_->empty();
 }

@@ -36,7 +36,7 @@ namespace {
 		std::optional<bool> bb;
 	};
 
-	ResTuple lookAhead(const std::list<MDPMNode>::iterator& curr, const std::vector<std::list<MDPMNode>::iterator>& parents, bool retracting);
+	ResTuple lookAhead(const std::list<MDPMNode>::iterator& curr, const std::vector<std::list<MDPMNode>::iterator>& parents, bool retracting) noexcept;
 
 	template<typename C=decltype(MDPMNode::children)>
 	typename C::iterator blockSiblings(MDPMNode& n) noexcept;
@@ -134,7 +134,7 @@ MDPMNode::public_iterator md_parseman::Parser::end() noexcept {
 }
 
 namespace {
-	ResTuple lookAhead(const std::list<MDPMNode>::iterator& curr, const std::vector<std::list<MDPMNode>::iterator>& parents, const bool retracting) {
+	ResTuple lookAhead(const std::list<MDPMNode>::iterator& curr, const std::vector<std::list<MDPMNode>::iterator>& parents, const bool retracting) noexcept {
 		if (not retracting and !curr->children.empty()) {
 #if 0
 			if (curr->flavor != MDPMNode::type_e::Document) {

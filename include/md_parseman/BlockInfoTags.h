@@ -56,9 +56,10 @@ struct FencedCode {
 	enum class symbol_e : char {
 		Tilde = '~', BackTick = '`'
 	};
-	md_parseman::Int     length;
-	symbol_e               type;
-	md_parseman::TinyInt indent;
+	int32_t           length;
+	symbol_e            type;
+	int8_t            indent;
+	std::string_view infoStr;
 };
 
 constexpr auto sizei = sizeof(FencedCode);

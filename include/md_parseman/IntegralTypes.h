@@ -8,7 +8,7 @@ namespace md_parseman {
 	using TinyInt = int8_t;
 	using UHalfInt = uint16_t;
 	using UInt = uint32_t;
-	using Int = uint32_t;
+	using Int = int32_t;
 	using UBigInt = uint64_t;
 }
 

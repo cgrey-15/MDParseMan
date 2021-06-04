@@ -1,1 +1,7 @@
-code 000
+```
+First Code 000
+```    
+
+~~~
+Second Code 000
+~~~    	

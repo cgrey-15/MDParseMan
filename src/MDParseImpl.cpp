@@ -69,7 +69,7 @@ namespace mdlang {
 			template< typename... > class Control,
 			typename ParseInput,
 			typename... States >
-		static bool match(ParseInput& in, ThematicBreakState& s, States&&...) {
+		static bool match(ParseInput& in, ThematicBreakState& s, States&&...) noexcept {
 			size_t i = 0;
 			while (i < in.size() and (in.peek_char(i) == ' ' or in.peek_char(i) == '\t')) {
 				++i;
@@ -545,25 +545,50 @@ auto mdpm_impl::tryIndentedCode(const bool isContPrefix,
 
 namespace mdlang {
 	using namespace TAO_PEGTL_NAMESPACE;
-	struct code_fence : sor< seq< rep_min<3, one<'`'>>, opt<at< star<not_one<'`'>>, eolf>> >, rep_min<3, one<'~'>> > {};
-	struct fenced_code_rule : code_fence {};
+	template <auto C>
+	struct code_fence : rep_min<3, one<C>> {};
+	struct fenced_code_opener_rule : sor< seq< code_fence<'`'>, star<whitespace0>, my_at<star<not_one<'`', '\n', '\r'>>, eolf> >,
+		seq<code_fence<'~'>, star<whitespace0>> > {};
+	struct fenced_code_closer_rule : seq<sor<code_fence<'`'>, code_fence<'~'>>, star<one<' ', '\t'>>, eolf> {};
 
 	template <typename Rule>
 	struct fenced_code_action : nothing<Rule> {};
 
 	template <auto C>
-	struct fenced_code_action<rep_min<3, one<C>>> {
+	struct fenced_code_action<code_fence<C>> {
 		template <typename ParseInput>
 		static void apply(const ParseInput& in, FencedCode& codeInfo) noexcept {
 			codeInfo.length = in.size();
 			codeInfo.type = static_cast<FencedCode::symbol_e>(C);
 		}
 	};
+#if 0
+	template<>
+	struct fenced_code_action<not_one<'`', '\n', '\r'>> {
+		template <typename ParseInput>
+		static void apply(const ParseInput& in, FencedCode& codeInfo) noexcept {
+			codeInfo.infoStr = "   ";
+		}
+	};
+	template<>
+	struct fenced_code_action<not_one<' ', '\t', '\n', '\r'>> {
+		template <typename ParseInput>
+		static void apply(const ParseInput& in, FencedCode& codeInfo) noexcept {
+			codeInfo.infoStr = "   ";
+		}
+	};
+#endif
 }
 
-auto tryFencedCode(peggi::memory_input<peggi::tracking_mode::eager>& input) noexcept ->FencedCode {
+auto mdpm_impl::tryFencedCodeOpener(peggi::memory_input<peggi::tracking_mode::eager>& input) noexcept ->FencedCode {
 	FencedCode info;
-	md_parseman::UHalfInt predScalar = peggi::parse<mdlang::fenced_code_rule, mdlang::fenced_code_action>(input, info);
+	md_parseman::Int predScalar = peggi::parse<mdlang::fenced_code_opener_rule, mdlang::fenced_code_action>(input, info);
+	return { info.length * predScalar, info.type };
+}
+
+auto mdpm_impl::tryFencedCodeCloser(peggi::memory_input<peggi::tracking_mode::eager>& input) noexcept ->FencedCode {
+	FencedCode info;
+	md_parseman::Int predScalar = peggi::parse<mdlang::fenced_code_closer_rule, mdlang::fenced_code_action>(input, info);
 	return { info.length * predScalar, info.type };
 }
 
@@ -599,30 +624,31 @@ namespace mdlang {
 
 	struct list_item_prefix1 : my_at<list_marker, sor< seq<plus<item_indent<1>>, sor<non_space, eolf>>, eolf> > {};
 
+
 	template <typename Rule>
 	struct li_action : nothing<Rule> {};
 
 	template<int K>
-	struct li_action<item_indent<K>> : require_apply {
+	struct li_action<item_indent<K>> {
+		template<typename Anything>
+		static void apply(const Anything&, LIIndentInfo&, LIParResult&, LIIndentInfo&, LIParResult&, char&, bool&, char&, ListInfo&) {
+			static_assert(false, "To MDParseMan lib dev: item_indent is not allowed with template params other than 1 (int).");
+		}
+	};
+
+	template<>
+	struct li_action<item_indent<1>> : require_apply {
 		template<typename ParseInput>
 		static void apply(const ParseInput& in, LIIndentInfo& pre, LIParResult& preRes, LIIndentInfo& post, LIParResult& postRes, char& finalPostIndent, bool& maybeNonBlank, char& mLen, ListInfo&) noexcept {
 			using md_parseman::UBigInt;
 			using md_parseman::UInt;
-			LIIndentInfo* which{};
-			LIParResult* whichRes{};
-			if constexpr (K == 3) {
-				which = &pre;
-				whichRes = &preRes;
+			constexpr int K = 1;
+
+			if (post.spacesIndented > 4) {
+				return;
 			}
-			else if (K == 1) {
-				which = &post;
-				whichRes = &postRes;
-				if (which->spacesIndented > 4) {
-					return;
-				}
-			}
-			LIIndentInfo& inIndent = *which;
-			LIParResult& inRes = *whichRes;
+			LIIndentInfo& inIndent = post;
+			LIParResult& inRes = postRes;
 
 			int isTab = false;
 
@@ -631,67 +657,45 @@ namespace mdlang {
 				indentCount = static_cast<UInt>(in.end() - in.begin());
 			}
 			else if (*in.begin() == '\t') {
-				if constexpr (K == 3) {
-					indentCount = tabFillSpace(inIndent.absoluteSlotPos + inIndent.spacesIndented);
-				}
-				else {
-					indentCount = tabFillSpace(inIndent.absoluteSlotPos + mLen + inIndent.spacesIndented);
-				}
+				indentCount = tabFillSpace(inIndent.absoluteSlotPos + mLen + inIndent.spacesIndented);
 				isTab = true;
-				if constexpr (K == 1) {
-					if (inIndent.spacesIndented + inIndent.spaceDeficit == 0) {
-						inIndent.indentStartsWithTab = true;
-					}
+				if (inIndent.spacesIndented/* + inIndent.spaceDeficit*/ == 0) {
+					inIndent.indentStartsWithTab = true;
 				}
 			}
-
 			UInt outstandingIndentBalance = static_cast<UInt>(std::max(static_cast<int>(K - inIndent.spaceDeficit), 0));
 
 			if (inIndent.spacesIndented + indentCount >= outstandingIndentBalance) {
-				if constexpr (K == 1) {
-					int remainingIndentConsumedThisMatchRaw = isTab ? indentCount : outstandingIndentBalance - inIndent.spacesIndented;
 
-					int totalIndentCountedThisMatch = inIndent.spacesIndented + remainingIndentConsumedThisMatchRaw + inIndent.spaceDeficit;
+				inRes.hasSomeIndent = true;
 
-					if (totalIndentCountedThisMatch > 4) {
-						if (inRes.indentsCounted != 1) {
-							inRes.indentsCounted = 1;
-							if (inIndent.indentStartsWithTab) {
-								inRes.indentWorthsConsumed = tabFillSpace(inIndent.absoluteSlotPos + mLen);
-								inRes.indentWorthsOverconsumed = inRes.indentWorthsConsumed - 1;
-								inRes.charTsToConsume = 1;
-							}
+				int totalIndentCountedThisMatch = inIndent.spacesIndented + indentCount + inIndent.spaceDeficit;
+				if (totalIndentCountedThisMatch > 4) {
+					if (inRes.indentsCounted != 1) {
+						inRes.indentsCounted = 1;
+						if (inIndent.indentStartsWithTab) {
+							inRes.indentWorthsConsumed = tabFillSpace(inIndent.absoluteSlotPos + mLen);
+							inRes.indentWorthsOverconsumed = inRes.indentWorthsConsumed - 1;
+							inRes.charTsToConsume = 1;
 						}
-					}
-					else {
-
-						inIndent.spacesIndented += indentCount;
-						inIndent.bytesToConsume += isTab ? 1 : indentCount;
-
-						inRes.hasSomeIndent = true;
-						inRes.indentsCounted = inIndent.spacesIndented;
-						inRes.indentWorthsConsumed = inIndent.spacesIndented;
-						inRes.charTsToConsume = inIndent.bytesToConsume;
+						else {
+							inRes.indentWorthsConsumed = 1;
+							inRes.indentWorthsOverconsumed = 0;
+							inRes.charTsToConsume = 1;
+						}
 					}
 				}
 				else {
-					if (inIndent.spacesIndented + indentCount > outstandingIndentBalance) {
-						inRes.hasSomeIndent = false;
-					}
-					UInt remainingIndentConsumedThisMatchRaw = isTab ? indentCount : outstandingIndentBalance - inIndent.spacesIndented;
-					UInt bytesToConsume = isTab ? 1 : indentCount;
-					UInt totalIndentCountedThisMatch = inIndent.spacesIndented + remainingIndentConsumedThisMatchRaw + inIndent.spaceDeficit;
-					inIndent.spacesIndented += remainingIndentConsumedThisMatchRaw;
+					inIndent.spacesIndented += indentCount;
+					inIndent.bytesToConsume += isTab ? 1 : indentCount;
+
+					inRes.indentsCounted = inIndent.spacesIndented;
 					inRes.indentWorthsConsumed = inIndent.spacesIndented;
-					inRes.indentsCounted = totalIndentCountedThisMatch;
-					inRes.charTsToConsume += bytesToConsume;
+					inRes.charTsToConsume = inIndent.bytesToConsume;
 				}
 			}
 			else
 			{
-				if constexpr (K == 3) {
-					inRes.hasSomeIndent = true;
-				}
 				inIndent.spacesIndented += indentCount;
 				inIndent.bytesToConsume += isTab ? 1 : indentCount;
 				inRes.indentWorthsConsumed = inIndent.spacesIndented;
@@ -820,7 +824,7 @@ auto mdpm_impl::tryListItem0(peggi::memory_input<peggi::tracking_mode::eager>& i
 	LIIndentInfo infoPre{static_cast<uint8_t>(indentDeficit), static_cast<uint8_t>(absoluteLogicalIndent)};
 	LIParResult resultPre{true};
 
-	LIIndentInfo infoPost{};
+	LIIndentInfo infoPost{static_cast<uint8_t>(indentDeficit), static_cast<uint8_t>(absoluteLogicalIndent)};
 	LIParResult resultPost{};
 
 	char finalCountThing{};
@@ -833,25 +837,6 @@ auto mdpm_impl::tryListItem0(peggi::memory_input<peggi::tracking_mode::eager>& i
 	parseIsValid = peggi::parse<mdlang::list_item_prefix1, mdlang::li_action>(input, infoPre, resultPre, infoPost, resultPost, 
 		finalCountThing, maybeNonblankLine, markerLen, listInformationFound);
 
-	/*
-	struct LIIndentInfo {
-		uint8_t spaceDeficit;
-		uint8_t absoluteSlotPos;
-		uint8_t spacesIndented;
-		uint8_t spacesIndentedToSkip;
-		uint8_t bytesToConsume;
-		bool indentStartsWithTab;
-		int indentAmtRequired = -1;
-	};
-	struct LIParResult {
-		bool hasSomeIndent;
-		bool matchesIfSpecificIndent;
-		uint8_t indentWorthsOverconsumed;
-		uint8_t indentWorthsConsumed;
-		uint32_t charTsCounted;
-		uint32_t indentsCounted;
-	};
-	*/
 	using md_parseman::UInt;
 	if (parseIsValid) {
 		if (resultPre.hasSomeIndent and (resultPost.hasSomeIndent or not maybeNonblankLine)) {
@@ -1000,8 +985,9 @@ namespace mdlang {
 	template<>
 	struct indent_action<non_space> : require_apply {
 		template <typename ParseInput>
-		static void apply(const ParseInput& in, const int, IndentInformation& info, IndentInformation&, const md_parseman::UInt, const md_parseman::UTinyInt) noexcept {
+		static void apply(const ParseInput& in, const int, IndentInformation& info, IndentInformation& opt, const md_parseman::UInt, const md_parseman::UTinyInt) noexcept {
 			info.isNonblank = true;
+			opt.isNonblank = true;
 		}
 	};
 }
@@ -1020,7 +1006,16 @@ auto mdpm_impl::countWhitespaces0(peggi::memory_input<peggi::tracking_mode::eage
 	}
 	return info;
 }
+auto mdpm_impl::countWhitespaces1(peggi::memory_input<peggi::tracking_mode::eager>& input, const int sizeN, const UInt absoluteLogicalSpaces, const UTinyInt deficit) noexcept -> IndentInformation {
+	IndentInformation info{};
+	IndentInformation extraIndents{};
 
+	peggi::parse<mdlang::indented_text_line, mdlang::indent_action>(input, sizeN, info, extraIndents, absoluteLogicalSpaces, deficit);
+	//info.indentSpaces += extraIndents.indentSpaces;
+	//info.whitespaces += extraIndents.whitespaces;
+	return info;
+	//return extraIndents;
+}
 
 
 

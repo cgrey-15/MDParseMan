@@ -99,6 +99,7 @@ namespace {
 	bool isTightList(const IterationProperty& run);
 
 	void printListTag(bool isBeginTag, const ListInfo& tagInfo, std::ostream& out, bool prependNl, bool appendNl);
+	void printCodeTag(bool isBeginTag, const FencedCode& codeInfo, std::ostream& out, bool preNl, bool postNl);
 	void printTag(const char* name, bool prependNewline, bool useNewline, std::ostream& out);
 	void printMiscTag(const char* name, bool prependNewline, bool appendNewline, std::ostream& out);
 	void printLeaf(const char* tag, const MDPMNode& block, std::ostream& out, bool nextBlockIsStrangerNonLeaf = false);
@@ -259,6 +260,9 @@ namespace {
 		case MDPMNode::type_e::Quote:
 			printTag("/blockquote", false, true, out);
 			break;
+		case MDPMNode::type_e::FencedCode:
+			printCodeTag(false, std::get<FencedCode>(run.curr->crtrstc), out, false, true);
+			break;
 		case MDPMNode::type_e::IndentedCode:
 			out << "</code></pre>\n";
 			break;
@@ -304,6 +308,9 @@ namespace {
 			//headingTag = std::get<Heading>(run.curr->crtrstc).lvl == 1 ? "h1" : "h2";
 			headingTag[(sizeof(headingTag) / sizeof(char)) - 2] += std::get<Heading>(run.curr->crtrstc).lvl;
 			printTag(headingTag, prependNl, false, out);
+			break;
+		case MDPMNode::type_e::FencedCode:
+			printCodeTag(true, std::get<FencedCode>(run.curr->crtrstc), out, false, false);
 			break;
 		case MDPMNode::type_e::IndentedCode:
 			out << "<pre><code>";
@@ -377,7 +384,20 @@ namespace {
 			out << '\n';
 		}
 	}
+	void printCodeTag(bool isBeginTag, const FencedCode& codeInfo, std::ostream& out, const bool preNl, const bool postNl) {
+		using namespace std::string_literals;
+		const std::string beginFragmentOpener = "<pre><code";
+		const std::string fragmentCloser = "</code></pre>";
 
+		const std::string prependant = preNl ? "\n"s : ""s;
+		const std::string appendant = postNl ? "\n"s : ""s;
+
+		const std::string optInfo = codeInfo.infoStr.empty() ? ""s : " class=\"language-"s + std::string{ codeInfo.infoStr.substr(0, codeInfo.infoStr.find_first_of(" \t")) } + "\""s;
+
+		const std::string printStr = prependant + (isBeginTag ? beginFragmentOpener + optInfo + ">"s : fragmentCloser) + appendant;
+
+		out << printStr;
+	}
 	void printLeaf(const char* tag, const MDPMNode& block, std::ostream& out, const bool nextBlockIsStrangerNonleaf) {
 		bool isPar = block.flavor == MDPMNode::type_e::Paragraph;
 

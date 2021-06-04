@@ -57,7 +57,9 @@ namespace mdpm_impl {
 		const md_parseman::UInt absoluteLogicalIndent, 
 		const md_parseman::UInt indentDeficit) noexcept ->std::tuple<md_parseman::UInt, md_parseman::UInt, char, bool, bool>;
 
-	auto tryFencedCode(peggi::memory_input<peggi::tracking_mode::eager>& input) noexcept ->FencedCode;
+	constexpr md_parseman::Int MIN_FENCE_SIZE = 3;
+	auto tryFencedCodeOpener(peggi::memory_input<peggi::tracking_mode::eager>& input) noexcept ->FencedCode;
+	auto tryFencedCodeCloser(peggi::memory_input<peggi::tracking_mode::eager>& input) noexcept ->FencedCode;
 
 	auto tryListItem(peggi::memory_input<peggi::tracking_mode::eager>& input,
 		const size_t absoluteLogicalIndent,
@@ -76,6 +78,8 @@ namespace mdpm_impl {
 
 	//auto countWhitespaces(peggi::memory_input<peggi::tracking_mode::eager>& input, md_parseman::UInt absoluteLogicalSpaces) -> std::tuple<bool, md_parseman::UInt, md_parseman::UInt>;
 	auto countWhitespaces0(peggi::memory_input<peggi::tracking_mode::eager>& input, const int sizeN, const md_parseman::UInt absoluteLogicalSpaces, const md_parseman::UTinyInt deficit) noexcept ->IndentInformation;
+
+	auto countWhitespaces1(peggi::memory_input<peggi::tracking_mode::eager>& input, const int sizeN, const md_parseman::UInt absoluteLogicalSpaces, const md_parseman::UTinyInt deficit) noexcept -> IndentInformation;
 
 	size_t checkNonBlank(peggi::memory_input<peggi::tracking_mode::eager>& input) noexcept;
 }

@@ -1,0 +1,3 @@
+````
+Not Fenced Code 006
+```
