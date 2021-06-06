@@ -65,9 +65,11 @@ set(COPY_CMD "$<IF:${CMAKE_HOST_WIN32},copy,cp>")
 add_custom_command(TARGET MDParseMan POST_BUILD
  COMMAND ${COPY_CMD} $<SHELL_PATH:$<TARGET_FILE:MDParseMan>>  $<SHELL_PATH:${CMAKE_BINARY_DIR}/test>#${CMAKE_BINARY_DIR}/test>
 )
-add_custom_command(TARGET MDParseMan POST_BUILD
- COMMAND ${COPY_CMD} $<SHELL_PATH:$<TARGET_PDB_FILE:MDParseMan>> $<SHELL_PATH:${CMAKE_BINARY_DIR}/test>#${CMAKE_BINARY_DIR}/test>
-)
+if(WIN32)
+ add_custom_command(TARGET MDParseMan POST_BUILD
+  COMMAND ${COPY_CMD} $<SHELL_PATH:$<TARGET_PDB_FILE:MDParseMan>> $<SHELL_PATH:${CMAKE_BINARY_DIR}/test>#${CMAKE_BINARY_DIR}/test>
+ )
+endif()
 
 if(WIN32 AND USE_OSS_MICROSOFT_STL)
  add_custom_command(TARGET mdsprig POST_BUILD
