@@ -632,7 +632,7 @@ namespace mdlang {
 	struct li_action<item_indent<K>> {
 		template<typename Anything>
 		static void apply(const Anything&, LIIndentInfo&, LIParResult&, LIIndentInfo&, LIParResult&, char&, bool&, char&, ListInfo&) {
-			static_assert(false, "To MDParseMan lib dev: item_indent is not allowed with template params other than 1 (int).");
+			static_assert(K==1, "To MDParseMan lib dev: item_indent is not allowed with template params other than 1 (int).");
 		}
 	};
 
