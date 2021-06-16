@@ -95,12 +95,13 @@ endif()
 set(COPY_CMD "$<IF:${CMAKE_HOST_WIN32},copy,cp>")
 
 
+
 if(WIN32 AND USE_OSS_MICROSOFT_STL)
  set(CMAKE_VS_JUST_MY_CODE_DEBUGGING 1)
  target_include_directories(MDParseManTest SYSTEM BEFORE PRIVATE ${MICROSOFT_STL_BINARY_DIR}/out/inc)
  target_link_libraries(MDParseManTest PRIVATE msvcprt)
  add_custom_command(TARGET MDParseManTest POST_BUILD
-  COMMAND ${COPY_CMD} $<SHELL_PATH:${MICROSOFT_STL_BINARY_DIR}/out/bin/${MICROSOFT_STL_ARCHITECTURE_NAME}/msvcp140$<IF:$<CONFIG:Debug>,d,"">_oss.dll> $<SHELL_PATH:$<TARGET_FILE_DIR:MDParseManTest>>
+  COMMAND ${CMAKE_COMMAND} -E copy $<SHELL_PATH:${MICROSOFT_STL_BINARY_DIR}/out/bin/${MICROSOFT_STL_ARCHITECTURE_NAME}/msvcp140$<IF:$<CONFIG:Debug>,d,"">_oss.dll> $<SHELL_PATH:$<TARGET_FILE_DIR:MDParseManTest>>
  )
 endif()
 
